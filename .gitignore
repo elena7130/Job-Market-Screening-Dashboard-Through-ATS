@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets and local environment
+.env
+.env.*
+
+# Local runtime inputs
+ats_china_job_discovery/data/search_results.csv
+
+# Local databases and generated outputs
+*.db
+*.db-journal
+ats_china_job_discovery/exports/
+ats_china_job_discovery/output/
+
+# Local editor/system files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

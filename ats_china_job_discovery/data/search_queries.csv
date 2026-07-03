@@ -1,0 +1,14 @@
+query_text,discovered_keyword,enabled
+site:job-boards.greenhouse.io China,China,1
+site:job-boards.greenhouse.io APAC,APAC,1
+site:job-boards.greenhouse.io "Asia Pacific",Asia Pacific,1
+site:jobs.lever.co China,China,1
+site:jobs.lever.co APAC,APAC,1
+site:jobs.lever.co "Asia Pacific",Asia Pacific,1
+site:jobs.ashbyhq.com China,China,1
+site:jobs.ashbyhq.com APAC,APAC,1
+site:jobs.smartrecruiters.com China,China,1
+site:jobs.smartrecruiters.com APAC,APAC,1
+site:recruitee.com China,China,1
+site:recruitee.com APAC,APAC,1
+site:recruitee.com "Asia Pacific",Asia Pacific,1

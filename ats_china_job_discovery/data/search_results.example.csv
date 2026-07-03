@@ -1,0 +1,3 @@
+source_query,result_url,result_title,discovered_keyword
+site:job-boards.greenhouse.io China,https://job-boards.greenhouse.io/examplecompany/jobs/123456,Example Job,China
+site:jobs.lever.co APAC,https://jobs.lever.co/examplecompany/abc-def,Example Job,APAC
