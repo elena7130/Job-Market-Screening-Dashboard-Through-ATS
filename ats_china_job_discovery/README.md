@@ -74,6 +74,27 @@ Optional paths:
 python main.py --input data/search_results.csv --db output/ats_jobs.db --exports output/exports
 ```
 
+## Dashboard
+
+Run the local Streamlit dashboard:
+
+```bash
+streamlit run dashboard.py
+```
+
+Or:
+
+```bash
+python -m streamlit run dashboard.py
+```
+
+The dashboard reads `output/ats_jobs.db` by default and provides:
+
+- Excel-like job filtering by keyword, company, ATS type, recency, and fetch status.
+- Sortable job, company, and discovery candidate tables.
+- A job detail panel with JD text and the original job link.
+- CSV download for the current filtered job result.
+
 ## Optional: semi-automated discovery
 
 You can keep manually editing `data/search_results.csv`, or use `discover.py` to find candidate ATS URLs through a search API.
