@@ -46,6 +46,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             ats_job_id TEXT,
             title TEXT,
             location_raw TEXT,
+            location_normalized TEXT,
+            is_apac INTEGER,
             description TEXT,
             jd_text TEXT,
             jd_text_length INTEGER,
@@ -56,6 +58,10 @@ def init_db(conn: sqlite3.Connection) -> None:
             ats_board_token TEXT,
             ats_published_at TEXT,
             ats_updated_at TEXT,
+            ats_date_normalized TEXT,
+            ats_date_source TEXT,
+            ats_age_days INTEGER,
+            ats_age_bucket TEXT,
             first_seen_at TEXT,
             last_seen_at TEXT,
             fetched_at TEXT,
@@ -104,6 +110,12 @@ def _ensure_jobs_columns(conn: sqlite3.Connection) -> None:
         "normalized_url": "TEXT",
         "fetch_status": "TEXT",
         "ats_board_token": "TEXT",
+        "location_normalized": "TEXT",
+        "is_apac": "INTEGER",
+        "ats_date_normalized": "TEXT",
+        "ats_date_source": "TEXT",
+        "ats_age_days": "INTEGER",
+        "ats_age_bucket": "TEXT",
     }
     for column, column_type in column_defs.items():
         if column not in existing_columns:
@@ -118,7 +130,12 @@ def _backfill_jobs_columns(conn: sqlite3.Connection) -> None:
             jd_text_length = COALESCE(jd_text_length, LENGTH(COALESCE(jd_text, description, ''))),
             normalized_url = COALESCE(normalized_url, url, ''),
             fetch_status = COALESCE(fetch_status, CASE WHEN is_current = 1 THEN 'success' ELSE 'closed' END),
-            ats_board_token = COALESCE(ats_board_token, ats_token, '')
+            ats_board_token = COALESCE(ats_board_token, ats_token, ''),
+            location_normalized = COALESCE(location_normalized, location_raw, ''),
+            is_apac = COALESCE(is_apac, 0),
+            ats_date_normalized = COALESCE(ats_date_normalized, ''),
+            ats_date_source = COALESCE(ats_date_source, 'unknown'),
+            ats_age_bucket = COALESCE(ats_age_bucket, 'unknown')
         """
     )
 
@@ -185,15 +202,17 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
         """
         INSERT INTO jobs (
             company_name, ats_type, ats_token, ats_job_id, title, location_raw,
-            description, jd_text, jd_text_length, department, url, normalized_url,
-            fetch_status, ats_board_token, ats_published_at, ats_updated_at, first_seen_at,
+            location_normalized, is_apac, description, jd_text, jd_text_length, department, url, normalized_url,
+            fetch_status, ats_board_token, ats_published_at, ats_updated_at,
+            ats_date_normalized, ats_date_source, ats_age_days, ats_age_bucket, first_seen_at,
             last_seen_at, fetched_at, is_current, recency_status, matched_location_keywords,
             raw_json
         )
         VALUES (
             :company_name, :ats_type, :ats_token, :ats_job_id, :title, :location_raw,
-            :description, :jd_text, :jd_text_length, :department, :url, :normalized_url,
+            :location_normalized, :is_apac, :description, :jd_text, :jd_text_length, :department, :url, :normalized_url,
             :fetch_status, :ats_board_token, :ats_published_at, :ats_updated_at,
+            :ats_date_normalized, :ats_date_source, :ats_age_days, :ats_age_bucket,
             :first_seen_at, :last_seen_at, :fetched_at, :is_current, :recency_status,
             :matched_location_keywords, :raw_json
         )
@@ -201,6 +220,8 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
             company_name = excluded.company_name,
             title = excluded.title,
             location_raw = excluded.location_raw,
+            location_normalized = COALESCE(NULLIF(jobs.location_normalized, ''), excluded.location_normalized),
+            is_apac = excluded.is_apac,
             description = excluded.description,
             jd_text = excluded.jd_text,
             jd_text_length = excluded.jd_text_length,
@@ -211,6 +232,10 @@ def upsert_job(conn: sqlite3.Connection, job: dict[str, Any]) -> None:
             ats_board_token = excluded.ats_board_token,
             ats_published_at = excluded.ats_published_at,
             ats_updated_at = excluded.ats_updated_at,
+            ats_date_normalized = excluded.ats_date_normalized,
+            ats_date_source = excluded.ats_date_source,
+            ats_age_days = excluded.ats_age_days,
+            ats_age_bucket = excluded.ats_age_bucket,
             first_seen_at = jobs.first_seen_at,
             last_seen_at = excluded.last_seen_at,
             fetched_at = excluded.fetched_at,

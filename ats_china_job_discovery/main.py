@@ -9,10 +9,12 @@ from typing import Any
 
 import pandas as pd
 
+from ats_dates import compute_ats_date_info
+import clean_database
 import db
 from exporter import export_csvs
 from fetchers.common import FetchError
-from keywords import find_location_keywords
+from keywords import find_location_keywords, is_apac_job
 from normalizer import normalize_job
 from parsers import parse_ats_url
 from recency import RECENT_STATUSES, classify_recency
@@ -22,6 +24,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT = BASE_DIR / "data" / "search_results.csv"
 DEFAULT_OUTPUT = BASE_DIR / "output"
 DEFAULT_DB = DEFAULT_OUTPUT / "ats_jobs.db"
+DEFAULT_CLEAN_DB = DEFAULT_OUTPUT / "ats_jobs.clean.db"
 DEFAULT_EXPORTS = DEFAULT_OUTPUT / "exports"
 
 REQUIRED_COLUMNS = {"source_query", "result_url"}
@@ -32,9 +35,11 @@ def main() -> int:
     args = parse_args()
     input_path = Path(args.input)
     db_path = Path(args.db)
+    clean_db_path = Path(args.clean_db)
     exports_dir = Path(args.exports)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    exports_dir.mkdir(parents=True, exist_ok=True)
+    if args.export_csvs:
+        exports_dir.mkdir(parents=True, exist_ok=True)
 
     conn = db.connect(db_path)
     db.init_db(conn)
@@ -49,7 +54,9 @@ def main() -> int:
     run_stats = {
         "api_success_companies": 0,
         "jobs_fetched": 0,
+        "new_jobs": 0,
         "china_keyword_hit_jobs": 0,
+        "new_china_keyword_hit_jobs": 0,
     }
 
     companies = [
@@ -62,19 +69,53 @@ def main() -> int:
         print(f"Fetching {company['ats_type']}:{company['ats_token']} ...", flush=True)
         process_company(conn, company, run_stats)
 
-    recent_jobs_exported, _companies_exported = export_csvs(conn, exports_dir)
+    recent_jobs_exported = None
+    if args.export_csvs:
+        recent_jobs_exported, _companies_exported = export_csvs(conn, exports_dir)
+    conn.commit()
+    conn.close()
+
+    clean_sync_stats = None
+    clean_stats = None
+    if not args.skip_clean:
+        clean_sync_stats, clean_stats = clean_database.run_cleaning(
+            source_db=db_path,
+            clean_db=clean_db_path,
+            rebuild=args.rebuild_clean_db,
+        )
 
     print("Run summary")
     print(f"- input URLs: {input_url_count}")
     print(f"- unique ATS companies discovered: {len(discovered_keys)}")
     print(f"- API-success companies: {run_stats['api_success_companies']}")
     print(f"- jobs fetched: {run_stats['jobs_fetched']}")
+    print(f"- new jobs discovered: {run_stats['new_jobs']}")
     print(f"- China/APAC keyword-hit jobs: {run_stats['china_keyword_hit_jobs']}")
-    print(f"- recent China/APAC jobs exported: {recent_jobs_exported}")
+    print(
+        f"- new China-region keyword-hit jobs discovered: "
+        f"{run_stats['new_china_keyword_hit_jobs']}"
+    )
+    if args.export_csvs:
+        print(f"- recent China/APAC jobs exported: {recent_jobs_exported}")
+        print(f"- exports: {exports_dir}")
+    else:
+        print("- CSV exports: skipped; use --export-csvs when needed")
     print(f"- database: {db_path}")
-    print(f"- exports: {exports_dir}")
-
-    conn.close()
+    if args.skip_clean:
+        print("- clean database: skipped")
+    else:
+        print(f"- clean database: {clean_db_path}")
+        if clean_sync_stats is not None:
+            print(
+                f"- clean sync: {clean_sync_stats['jobs_inserted']} jobs inserted, "
+                f"{clean_sync_stats['jobs_updated']} jobs updated, "
+                f"rebuilt={clean_sync_stats['clean_db_rebuilt']}"
+            )
+        if clean_stats is not None:
+            print(
+                f"- clean jobs processed: {clean_stats['jobs_seen']}, "
+                f"JD cleaned: {clean_stats['jd_cleaned']}"
+            )
     return 0
 
 
@@ -84,7 +125,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input", default=str(DEFAULT_INPUT), help="Path to search_results.csv")
     parser.add_argument("--db", default=str(DEFAULT_DB), help="Path to ats_jobs.db")
+    parser.add_argument("--clean-db", default=str(DEFAULT_CLEAN_DB), help="Path to ats_jobs.clean.db")
     parser.add_argument("--exports", default=str(DEFAULT_EXPORTS), help="Exports folder")
+    parser.add_argument(
+        "--export-csvs",
+        action="store_true",
+        help="Export CSV files after updating the database",
+    )
+    parser.add_argument(
+        "--skip-clean",
+        action="store_true",
+        help="Skip updating the clean database after fetching jobs.",
+    )
+    parser.add_argument(
+        "--rebuild-clean-db",
+        action="store_true",
+        help="Overwrite the clean database from the main database before cleaning.",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +213,8 @@ def process_company(conn: Any, company: Any, run_stats: dict[str, int]) -> None:
         return
 
     current_job_ids: set[str] = set()
+    new_job_ids: set[str] = set()
+    new_china_keyword_hit_job_ids: set[str] = set()
     china_keyword_hits = 0
     recent_china_keyword_hits = 0
 
@@ -169,18 +228,32 @@ def process_company(conn: Any, company: Any, run_stats: dict[str, int]) -> None:
         jd_text = job.get("description", "")
         normalized_url = job.get("normalized_url") or job.get("url", "")
         fetch_status = classify_fetch_status(normalized_url, jd_text)
-        first_seen_at = (
-            db.get_first_seen_at(conn, ats_type, ats_token, job["ats_job_id"]) or checked_at
+        existing_first_seen_at = db.get_first_seen_at(
+            conn, ats_type, ats_token, job["ats_job_id"]
         )
+        is_new_job = existing_first_seen_at is None
+        first_seen_at = existing_first_seen_at or checked_at
         matched_keywords = find_location_keywords(
             job["title"], job["location_raw"], jd_text
         )
         recency_status = classify_recency(
             job["ats_published_at"], job["ats_updated_at"], first_seen_at
         )
+        ats_date_info = compute_ats_date_info(
+            ats_published_at=job["ats_published_at"],
+            ats_updated_at=job["ats_updated_at"],
+            raw_json=job.get("raw_json"),
+        )
 
         job.update(
             {
+                "location_normalized": job["location_raw"],
+                "is_apac": is_apac_job(
+                    job["location_raw"],
+                    job["title"],
+                    jd_text,
+                    "; ".join(matched_keywords),
+                ),
                 "first_seen_at": first_seen_at,
                 "last_seen_at": checked_at,
                 "fetched_at": checked_at,
@@ -190,15 +263,23 @@ def process_company(conn: Any, company: Any, run_stats: dict[str, int]) -> None:
                 "normalized_url": normalized_url,
                 "fetch_status": fetch_status,
                 "ats_board_token": ats_token,
+                "ats_date_normalized": ats_date_info.normalized,
+                "ats_date_source": ats_date_info.source,
+                "ats_age_days": ats_date_info.age_days,
+                "ats_age_bucket": ats_date_info.bucket,
                 "recency_status": recency_status,
                 "matched_location_keywords": "; ".join(matched_keywords),
             }
         )
         db.upsert_job(conn, job)
         current_job_ids.add(job["ats_job_id"])
+        if is_new_job:
+            new_job_ids.add(job["ats_job_id"])
 
         if matched_keywords:
             china_keyword_hits += 1
+            if is_new_job:
+                new_china_keyword_hit_job_ids.add(job["ats_job_id"])
             if recency_status in RECENT_STATUSES:
                 recent_china_keyword_hits += 1
 
@@ -217,7 +298,9 @@ def process_company(conn: Any, company: Any, run_stats: dict[str, int]) -> None:
 
     run_stats["api_success_companies"] += 1
     run_stats["jobs_fetched"] += len(current_job_ids)
+    run_stats["new_jobs"] += len(new_job_ids)
     run_stats["china_keyword_hit_jobs"] += china_keyword_hits
+    run_stats["new_china_keyword_hit_jobs"] += len(new_china_keyword_hit_job_ids)
 
 
 def stable_fallback_job_id(job: dict[str, Any]) -> str:

@@ -146,7 +146,24 @@ def read_queries(path: Path) -> pd.DataFrame:
 
 
 def search_google(api_key: str, query: str, limit: int) -> list[dict[str, Any]]:
-    response = requests.get(
+    try:
+        response = _search_google_request(api_key, query, limit, trust_env=True)
+    except requests.exceptions.ProxyError:
+        response = _search_google_request(api_key, query, limit, trust_env=False)
+    response.raise_for_status()
+    data = response.json()
+    organic_results = data.get("organic_results") or []
+    if not isinstance(organic_results, list):
+        return []
+    return organic_results
+
+
+def _search_google_request(
+    api_key: str, query: str, limit: int, *, trust_env: bool
+) -> requests.Response:
+    session = requests.Session()
+    session.trust_env = trust_env
+    return session.get(
         SEARCHAPI_URL,
         params={
             "engine": "google",
@@ -157,12 +174,6 @@ def search_google(api_key: str, query: str, limit: int) -> list[dict[str, Any]]:
         headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
         timeout=30,
     )
-    response.raise_for_status()
-    data = response.json()
-    organic_results = data.get("organic_results") or []
-    if not isinstance(organic_results, list):
-        return []
-    return organic_results
 
 
 def build_candidate(

@@ -8,13 +8,15 @@ import streamlit as st
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_DB = BASE_DIR / "output" / "ats_jobs.db"
+DEFAULT_DB = BASE_DIR / "output" / "ats_jobs.clean.db"
 
 JOB_COLUMNS = [
     "id",
     "company_name",
     "title",
     "location_raw",
+    "location_normalized",
+    "is_apac",
     "ats_type",
     "ats_board_token",
     "recency_status",
@@ -23,6 +25,10 @@ JOB_COLUMNS = [
     "matched_location_keywords",
     "ats_published_at",
     "ats_updated_at",
+    "ats_date_normalized",
+    "ats_date_source",
+    "ats_age_days",
+    "ats_age_bucket",
     "first_seen_at",
     "last_seen_at",
     "jd_text_length",
@@ -72,9 +78,12 @@ def main() -> None:
 def load_jobs(db_path: str, db_mtime: float) -> pd.DataFrame:
     _ = db_mtime
     query = """
-        SELECT id, company_name, title, location_raw, ats_type, ats_board_token,
+        SELECT id, company_name, title, location_raw, location_normalized, is_apac,
+               ats_type, ats_board_token,
                recency_status, fetch_status, is_current, matched_location_keywords,
-               ats_published_at, ats_updated_at, first_seen_at, last_seen_at,
+               ats_published_at, ats_updated_at,
+               ats_date_normalized, ats_date_source, ats_age_days, ats_age_bucket,
+               first_seen_at, last_seen_at,
                jd_text_length, normalized_url, url, jd_text
         FROM jobs
         ORDER BY last_seen_at DESC, company_name, title
@@ -171,6 +180,7 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         only_current = st.checkbox("只看当前有效岗位", value=True)
         only_keyword = st.checkbox("只看 China/APAC 关键词命中", value=True)
         recent_only = st.checkbox("只看近期岗位", value=False)
+        apac_only = st.checkbox("只看 APAC 岗位", value=False)
 
         search_text = st.text_input(
             "全文搜索",
@@ -188,13 +198,41 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         fetch_options = sorted(jobs_df["fetch_status"].dropna().astype(str).unique())
         fetch_filter = st.multiselect("Fetch status", fetch_options)
 
+        available_buckets = set(jobs_df["ats_age_bucket"].dropna().astype(str))
+        bucket_order = [
+            "0-7 days",
+            "8-14 days",
+            "15-30 days",
+            "31-60 days",
+            "60+ days",
+            "unknown",
+        ]
+        age_bucket_options = [
+            bucket for bucket in bucket_order if bucket in available_buckets
+        ]
+        age_bucket_filter = st.multiselect(
+            "ATS 发布时间范围",
+            age_bucket_options,
+            default=[
+                bucket
+                for bucket in ["0-7 days", "8-14 days", "15-30 days"]
+                if bucket in age_bucket_options
+            ],
+        )
+
         company_options = sorted(
             jobs_df["company_name"].dropna().astype(str).unique()
         )
         company_filter = st.multiselect("公司", company_options)
 
+        title_filter = st.text_input(
+            "岗位名称搜索",
+            placeholder="输入岗位名称关键词...",
+        ).strip()
+
+
         location_counts = (
-            jobs_df["location_raw"]
+            jobs_df["location_normalized"]
             .astype(str)
             .replace("", pd.NA)
             .dropna()
@@ -226,21 +264,32 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
                 ["recent_published", "recent_updated", "newly_seen"]
             )
         ]
+    if apac_only:
+        df = df[df["is_apac"] == 1]
     if ats_filter:
         df = df[df["ats_type"].isin(ats_filter)]
     if recency_filter:
         df = df[df["recency_status"].isin(recency_filter)]
     if fetch_filter:
         df = df[df["fetch_status"].isin(fetch_filter)]
+    if age_bucket_filter:
+        df = df[df["ats_age_bucket"].astype(str).isin(age_bucket_filter)]
     if company_filter:
         df = df[df["company_name"].isin(company_filter)]
+    if title_filter:
+        df = df[
+            df["title"].astype(str).str.contains(
+                title_filter, case=False, na=False, regex=False
+            )
+        ]
     if location_filter:
-        df = df[df["location_raw"].isin(location_filter)]
+        df = df[df["location_normalized"].isin(location_filter)]
     if search_text:
         search_columns = [
             "company_name",
             "title",
             "location_raw",
+            "location_normalized",
             "matched_location_keywords",
             "jd_text",
         ]
@@ -267,24 +316,34 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
         "company_name",
         "title",
         "location_raw",
+        "location_normalized",
+        "is_apac",
         "recency_status",
         "matched_location_keywords",
         "ats_type",
         "fetch_status",
         "ats_published_at",
+        "ats_date_normalized",
+        "ats_age_days",
+        "ats_age_bucket",
         "first_seen_at",
         "normalized_url",
     ]
     display_df = filtered_df.head(limit).loc[:, display_columns].rename(
         columns={
             "company_name": "公司",
-            "title": "岗位",
+            "title": "岗位名称",
             "location_raw": "地点",
+            "location_normalized": "标准地点",
+            "is_apac": "APAC",
             "recency_status": "新鲜度",
             "matched_location_keywords": "命中关键词",
             "ats_type": "ATS",
             "fetch_status": "抓取状态",
             "ats_published_at": "发布时间",
+            "ats_date_normalized": "ATS日期",
+            "ats_age_days": "ATS天数",
+            "ats_age_bucket": "ATS范围",
             "first_seen_at": "首次发现",
             "normalized_url": "链接",
         }
@@ -324,9 +383,9 @@ def render_job_detail(filtered_df: pd.DataFrame) -> None:
     selected_id = labels[selected_label]
     row = detail_df[detail_df["id"] == selected_id].iloc[0]
 
-    st.markdown(f"**{row['title']}**")
+    st.markdown(f"**岗位名称：{row['title']}**")
     st.write(row["company_name"] or "Unknown company")
-    st.write(row["location_raw"] or "Unknown location")
+    st.write(row["location_normalized"] or row["location_raw"] or "Unknown location")
 
     url = row["normalized_url"] or row["url"]
     if url:
@@ -336,6 +395,9 @@ def render_job_detail(filtered_df: pd.DataFrame) -> None:
     st.text_input("命中关键词", value=str(row["matched_location_keywords"]), disabled=True)
     st.text_input("发布时间", value=str(row["ats_published_at"]), disabled=True)
     st.text_input("更新时间", value=str(row["ats_updated_at"]), disabled=True)
+    st.text_input("ATS日期", value=str(row["ats_date_normalized"]), disabled=True)
+    st.text_input("ATS日期来源", value=str(row["ats_date_source"]), disabled=True)
+    st.text_input("ATS年龄范围", value=str(row["ats_age_bucket"]), disabled=True)
     st.text_input("首次发现", value=str(row["first_seen_at"]), disabled=True)
 
     jd_text = str(row["jd_text"] or "")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 
 try:
@@ -34,11 +35,53 @@ LOCATION_KEYWORDS = [
     "Mandarin",
 ]
 
+APAC_KEYWORDS = [
+    "APAC",
+    "Asia Pacific",
+    "Asia-Pacific",
+    "Greater China",
+    "Mainland China",
+    "China",
+    "CN",
+    "Hong Kong",
+    "HK",
+    "Taiwan",
+    "Taipei",
+    "Singapore",
+    "Japan",
+    "Korea",
+    "South Korea",
+    "Australia",
+    "New Zealand",
+    "India",
+    "Thailand",
+    "Vietnam",
+    "Malaysia",
+    "Indonesia",
+    "Philippines",
+    "Shanghai",
+    "Beijing",
+    "Shenzhen",
+    "Guangzhou",
+    "Hangzhou",
+    "Suzhou",
+    "Chengdu",
+    "Wuhan",
+    "Nanjing",
+    "Xi'an",
+    "Remote Asia",
+    "Remote - Asia",
+    "Remote APAC",
+    "Remote - APAC",
+    "Remote, APAC",
+    "Remote, China",
+]
+
 
 def html_to_text(value: object) -> str:
     if value is None:
         return ""
-    text = str(value)
+    text = html.unescape(str(value))
     if "<" not in text or ">" not in text:
         return text
     if BeautifulSoup is None:
@@ -54,3 +97,11 @@ def find_location_keywords(*values: object) -> list[str]:
         if keyword.lower() in haystack:
             matches.append(keyword)
     return matches
+
+
+def is_apac_job(*values: object) -> int:
+    haystack = " ".join(html_to_text(value) for value in values if value is not None)
+    haystack = re.sub(r"\s+", " ", haystack).strip().lower()
+    if not haystack:
+        return 0
+    return int(any(keyword.lower() in haystack for keyword in APAC_KEYWORDS))

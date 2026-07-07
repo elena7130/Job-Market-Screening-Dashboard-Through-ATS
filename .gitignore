@@ -10,12 +10,17 @@ venv/
 
 # Local runtime inputs
 ats_china_job_discovery/data/search_results.csv
+ats_china_job_discovery/_probe_*.py
 
 # Local databases and generated outputs
 *.db
 *.db-journal
 ats_china_job_discovery/exports/
 ats_china_job_discovery/output/
+
+# Local tools/installers
+tools/
+*.msi
 
 # Local editor/system files
 .DS_Store

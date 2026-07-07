@@ -17,6 +17,12 @@ def normalize_job(ats_type: str, ats_token: str, raw: dict[str, Any]) -> dict[st
         return _normalize_smartrecruiters(ats_token, raw)
     if ats_type == "recruitee":
         return _normalize_recruitee(ats_token, raw)
+    if ats_type == "workday":
+        return _normalize_workday(ats_token, raw)
+    if ats_type == "thermofisher":
+        return _normalize_thermofisher(ats_token, raw)
+    if ats_type == "teamtailor":
+        return _normalize_teamtailor(ats_token, raw)
     raise ValueError(f"Unsupported ATS type: {ats_type}")
 
 
@@ -95,7 +101,14 @@ def _normalize_lever(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(item, dict):
                 continue
             parts.extend([item.get("text"), item.get("content")])
+        parts.append(raw.get("additional"))
         description = "\n".join(str(part) for part in parts if part)
+    elif raw.get("additional"):
+        description = "\n".join(
+            str(part)
+            for part in [description, raw.get("additional")]
+            if part
+        )
 
     job = _base(
         company_name=raw.get("company"),
@@ -215,7 +228,7 @@ def _normalize_recruitee(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
     )
     slug = raw.get("slug") or raw.get("offer_slug")
     if not url and slug:
-        url = f"https://{ats_token}.recruitee.com/o/{slug}"
+        url = f"https://{_recruitee_host(ats_token)}/o/{slug}"
 
     job = _base(
         company_name=raw.get("company_name"),
@@ -233,6 +246,156 @@ def _normalize_recruitee(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
     )
     job["normalized_url"] = job["url"]
     return job
+
+
+def _recruitee_host(ats_token: str) -> str:
+    if ats_token.startswith("domain:"):
+        return ats_token.removeprefix("domain:")
+    return f"{ats_token}.recruitee.com"
+
+
+def _normalize_workday(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    return _normalize_workday_like(
+        ats_type="workday",
+        ats_token=ats_token,
+        raw=raw,
+        company_name=raw.get("company_name"),
+    )
+
+
+def _normalize_thermofisher(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    return _normalize_workday_like(
+        ats_type="thermofisher",
+        ats_token=ats_token,
+        raw=raw,
+        company_name="Thermo Fisher Scientific",
+    )
+
+
+def _normalize_workday_like(
+    *,
+    ats_type: str,
+    ats_token: str,
+    raw: dict[str, Any],
+    company_name: object,
+) -> dict[str, Any]:
+    detail = raw.get("_workday_detail")
+    if not isinstance(detail, dict):
+        detail = {}
+
+    posting_info = detail.get("jobPostingInfo")
+    if not isinstance(posting_info, dict):
+        posting_info = {}
+
+    hiring_org = detail.get("hiringOrganization")
+    if not isinstance(hiring_org, dict):
+        hiring_org = {}
+
+    location = (
+        raw.get("locationsText")
+        or posting_info.get("location")
+        or posting_info.get("primaryLocation")
+        or posting_info.get("additionalLocationsText")
+    )
+    if isinstance(location, dict):
+        location = location.get("descriptor") or location.get("name")
+    if isinstance(location, list):
+        location = ", ".join(str(item) for item in location if item)
+
+    external_path = raw.get("externalPath") or posting_info.get("externalPath")
+    url = posting_info.get("externalUrl") or raw.get("url")
+    host = raw.get("_workday_host")
+    site = raw.get("_workday_site")
+    if not url and host and site and external_path:
+        path = str(external_path)
+        if not path.startswith("/"):
+            path = f"/{path}"
+        url = f"https://{host}/en-US/{site}{path}"
+
+    description = (
+        posting_info.get("jobDescription")
+        or raw.get("jobDescription")
+        or raw.get("description")
+    )
+
+    job = _base(
+        company_name=company_name or hiring_org.get("name") or raw.get("company_name"),
+        ats_type=ats_type,
+        ats_token=ats_token,
+        ats_job_id=posting_info.get("id") or _workday_requisition_id(raw) or external_path,
+        title=posting_info.get("title") or raw.get("title"),
+        location_raw=location,
+        description=description,
+        department=posting_info.get("jobFamily") or raw.get("department"),
+        url=url,
+        ats_published_at=raw.get("postedOn") or posting_info.get("postedOn"),
+        ats_updated_at=posting_info.get("updatedDate") or posting_info.get("startDate"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _workday_requisition_id(raw: dict[str, Any]) -> str:
+    fields = raw.get("bulletFields")
+    if isinstance(fields, list):
+        return " ".join(str(field) for field in fields if field).strip()
+    return ""
+
+
+def _normalize_teamtailor(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    identifier = raw.get("identifier")
+    if not isinstance(identifier, dict):
+        identifier = {}
+
+    hiring_org = raw.get("hiringOrganization")
+    if not isinstance(hiring_org, dict):
+        hiring_org = {}
+
+    job = _base(
+        company_name=hiring_org.get("name"),
+        ats_type="teamtailor",
+        ats_token=ats_token,
+        ats_job_id=identifier.get("value") or _teamtailor_id_from_url(raw),
+        title=raw.get("title"),
+        location_raw=_teamtailor_location(raw.get("jobLocation")),
+        description=raw.get("description"),
+        department=raw.get("employmentType"),
+        url=raw.get("_teamtailor_url") or raw.get("url"),
+        ats_published_at=raw.get("datePosted"),
+        ats_updated_at=raw.get("validThrough"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _teamtailor_location(value: object) -> str:
+    locations = value if isinstance(value, list) else [value]
+    parts = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        address = location.get("address")
+        if not isinstance(address, dict):
+            continue
+        address_parts = [
+            address.get("addressLocality"),
+            address.get("addressRegion"),
+            address.get("addressCountry"),
+        ]
+        text = ", ".join(str(part) for part in address_parts if part)
+        if text:
+            parts.append(text)
+    return " | ".join(parts)
+
+
+def _teamtailor_id_from_url(raw: dict[str, Any]) -> str:
+    url = str(raw.get("_teamtailor_url") or raw.get("url") or "")
+    marker = "/jobs/"
+    if marker not in url:
+        return ""
+    return url.split(marker, 1)[1].split("-", 1)[0].strip("/")
 
 
 def _clean_text(value: object) -> str:
