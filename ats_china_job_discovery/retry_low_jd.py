@@ -9,6 +9,7 @@ from typing import Any
 
 import requests
 
+from ats_dates import compute_ats_date_info
 import db
 from fetchers.common import TIMEOUT_SECONDS, USER_AGENT
 from keywords import find_location_keywords, is_apac_job
@@ -29,6 +30,8 @@ def main() -> int:
         conn,
         min_length=args.min_length,
         current_only=args.current_only,
+        ats_type=args.ats_type,
+        ats_token=args.ats_token,
         limit=args.limit,
     )
     if not targets:
@@ -139,16 +142,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--smartrecruiters-workers", type=int, default=8)
+    parser.add_argument("--ats-type", default="", help="Only retry this ATS type.")
+    parser.add_argument("--ats-token", default="", help="Only retry this ATS token.")
     return parser.parse_args()
 
 
 def load_targets(
-    conn: Any, *, min_length: int, current_only: bool, limit: int
+    conn: Any,
+    *,
+    min_length: int,
+    current_only: bool,
+    ats_type: str,
+    ats_token: str,
+    limit: int,
 ) -> list[Any]:
     where = ["COALESCE(jd_text_length, 0) < ?"]
     params: list[Any] = [min_length]
     if current_only:
         where.append("is_current = 1")
+    if ats_type:
+        where.append("ats_type = ?")
+        params.append(ats_type)
+    if ats_token:
+        where.append("ats_token = ?")
+        params.append(ats_token)
     query = f"""
         SELECT id, company_name, ats_type, ats_token, ats_job_id, first_seen_at,
                jd_text_length
@@ -217,6 +234,11 @@ def update_job(
     recency_status = classify_recency(
         job["ats_published_at"], job["ats_updated_at"], first_seen_at
     )
+    ats_date_info = compute_ats_date_info(
+        ats_published_at=job["ats_published_at"],
+        ats_updated_at=job["ats_updated_at"],
+        raw_json=job.get("raw_json"),
+    )
     job.update(
         {
             "first_seen_at": first_seen_at,
@@ -236,6 +258,10 @@ def update_job(
             "normalized_url": normalized_url,
             "fetch_status": classify_fetch_status(normalized_url, jd_text),
             "ats_board_token": job["ats_token"],
+            "ats_date_normalized": ats_date_info.normalized,
+            "ats_date_source": ats_date_info.source,
+            "ats_age_days": ats_date_info.age_days,
+            "ats_age_bucket": ats_date_info.bucket,
             "recency_status": recency_status,
             "matched_location_keywords": "; ".join(matched_keywords),
         }

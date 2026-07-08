@@ -287,6 +287,8 @@ def ensure_jobs_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN location_normalized TEXT")
     if "is_apac" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN is_apac INTEGER")
+    if "is_china" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN is_china INTEGER")
     if "ats_date_normalized" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN ats_date_normalized TEXT")
     if "ats_date_source" not in columns:
@@ -305,6 +307,15 @@ def ensure_jobs_columns(conn: sqlite3.Connection) -> None:
         WHERE location_normalized IS NULL OR location_normalized = ''
         """
     )
+    conn.execute(
+        """
+        UPDATE jobs
+        SET is_china = CASE
+            WHEN LOWER(COALESCE(location_normalized, '')) LIKE '%china%' THEN 1
+            ELSE 0
+        END
+        """
+    )
 
 
 def clean_jobs(
@@ -320,6 +331,7 @@ def clean_jobs(
         "jd_truncated": 0,
         "raw_json_cleared": 0,
         "is_apac_marked": 0,
+        "is_china_marked": 0,
     }
 
     for row in rows:
@@ -382,12 +394,23 @@ def clean_jobs(
         if apac_value:
             stats["is_apac_marked"] += 1
 
+        china_value = is_china_location(
+            updates.get("location_normalized", row["location_normalized"])
+        )
+        updates["is_china"] = china_value
+        if china_value:
+            stats["is_china_marked"] += 1
+
         if updates:
             set_clause = ", ".join(f"{column} = ?" for column in updates)
             params = [*updates.values(), row["id"]]
             conn.execute(f"UPDATE jobs SET {set_clause} WHERE id = ?", params)
 
     return stats
+
+
+def is_china_location(location_normalized: object) -> int:
+    return int("china" in str(location_normalized or "").lower())
 
 
 def clean_small_text(value: object) -> str:

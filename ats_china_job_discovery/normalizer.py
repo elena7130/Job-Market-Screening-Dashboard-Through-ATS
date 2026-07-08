@@ -23,6 +23,20 @@ def normalize_job(ats_type: str, ats_token: str, raw: dict[str, Any]) -> dict[st
         return _normalize_thermofisher(ats_token, raw)
     if ats_type == "teamtailor":
         return _normalize_teamtailor(ats_token, raw)
+    if ats_type == "avature":
+        return _normalize_avature(ats_token, raw)
+    if ats_type == "bamboohr":
+        return _normalize_bamboohr(ats_token, raw)
+    if ats_type == "breezy":
+        return _normalize_breezy(ats_token, raw)
+    if ats_type == "pinpoint":
+        return _normalize_pinpoint(ats_token, raw)
+    if ats_type == "rippling":
+        return _normalize_rippling(ats_token, raw)
+    if ats_type == "jibeapply":
+        return _normalize_jibeapply(ats_token, raw)
+    if ats_type == "comeet":
+        return _normalize_comeet(ats_token, raw)
     raise ValueError(f"Unsupported ATS type: {ats_type}")
 
 
@@ -66,7 +80,7 @@ def _normalize_greenhouse(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]
     location = raw.get("location")
     location_name = location.get("name") if isinstance(location, dict) else location
     job = _base(
-        company_name=raw.get("company_name"),
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
         ats_type="greenhouse",
         ats_token=ats_token,
         ats_job_id=raw.get("id"),
@@ -231,7 +245,7 @@ def _normalize_recruitee(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
         url = f"https://{_recruitee_host(ats_token)}/o/{slug}"
 
     job = _base(
-        company_name=raw.get("company_name"),
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
         ats_type="recruitee",
         ats_token=ats_token,
         ats_job_id=raw.get("id") or raw.get("offer_id") or slug,
@@ -398,6 +412,186 @@ def _teamtailor_id_from_url(raw: dict[str, Any]) -> str:
     return url.split(marker, 1)[1].split("-", 1)[0].strip("/")
 
 
+def _normalize_avature(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="avature",
+        ats_token=ats_token,
+        ats_job_id=raw.get("ats_job_id"),
+        title=raw.get("title"),
+        location_raw=raw.get("location"),
+        description=raw.get("description"),
+        department=raw.get("department"),
+        url=raw.get("url"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_bamboohr(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    detail = _dict_value(raw.get("_bamboohr_detail"))
+    result = _dict_value(detail.get("result")) or detail
+    location = _dict_value(raw.get("location"))
+    remote = "Remote" if raw.get("isRemote") else ""
+    location_raw = _join_parts([location.get("city"), location.get("state"), remote])
+    job_id = raw.get("id") or result.get("id")
+    origin = raw.get("_bamboohr_origin") or f"https://{ats_token}"
+    url = raw.get("jobOpeningShareUrl") or result.get("jobOpeningShareUrl")
+    if not url and job_id:
+        url = f"{origin}/careers/{job_id}"
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="bamboohr",
+        ats_token=ats_token,
+        ats_job_id=job_id,
+        title=result.get("jobOpeningName") or raw.get("jobOpeningName"),
+        location_raw=location_raw,
+        description=result.get("description") or result.get("jobDescription"),
+        department=raw.get("employmentStatusLabel") or result.get("employmentStatusLabel"),
+        url=url,
+        ats_published_at=result.get("datePosted") or raw.get("datePosted"),
+        ats_updated_at=result.get("lastUpdated") or raw.get("lastUpdated"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_breezy(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    location = _dict_value(raw.get("location"))
+    country = _dict_value(location.get("country"))
+    location_raw = location.get("name") or _join_parts(
+        [
+            location.get("city"),
+            location.get("state"),
+            country.get("name"),
+            "Remote" if location.get("is_remote") else "",
+        ]
+    )
+    description = raw.get("description") or raw.get("summary")
+    if isinstance(description, dict):
+        description = "\n".join(str(value) for value in description.values() if value)
+    job = _base(
+        company_name=raw.get("company_name"),
+        ats_type="breezy",
+        ats_token=ats_token,
+        ats_job_id=raw.get("_id") or raw.get("id") or _id_from_url(raw.get("url")),
+        title=raw.get("name") or raw.get("title"),
+        location_raw=location_raw,
+        description=description,
+        department=raw.get("department"),
+        url=raw.get("url"),
+        ats_published_at=raw.get("published_date") or raw.get("created_at"),
+        ats_updated_at=raw.get("updated_date") or raw.get("updated_at"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_pinpoint(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    location = _dict_value(raw.get("location"))
+    job_info = _dict_value(raw.get("job"))
+    job = _base(
+        company_name=raw.get("company_name"),
+        ats_type="pinpoint",
+        ats_token=ats_token,
+        ats_job_id=raw.get("id") or _id_from_url(raw.get("url") or raw.get("path")),
+        title=raw.get("title"),
+        location_raw=location.get("name") or _join_parts(
+            [location.get("city"), location.get("province"), location.get("country")]
+        ),
+        description=raw.get("description") or raw.get("content"),
+        department=job_info.get("department") or job_info.get("division"),
+        url=raw.get("url"),
+        ats_published_at=raw.get("published_at") or raw.get("created_at"),
+        ats_updated_at=raw.get("updated_at"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_rippling(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    location = raw.get("workLocation")
+    if isinstance(location, dict):
+        location = location.get("label") or location.get("name")
+    department = raw.get("department")
+    if isinstance(department, dict):
+        department = department.get("label") or department.get("name")
+    job = _base(
+        company_name=raw.get("company_name"),
+        ats_type="rippling",
+        ats_token=ats_token,
+        ats_job_id=raw.get("uuid") or raw.get("id") or _id_from_url(raw.get("url")),
+        title=raw.get("name") or raw.get("title"),
+        location_raw=location,
+        description=raw.get("description") or raw.get("jobDescription"),
+        department=department,
+        url=raw.get("url"),
+        ats_published_at=raw.get("publishedAt") or raw.get("createdAt"),
+        ats_updated_at=raw.get("updatedAt"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_jibeapply(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    data = _dict_value(raw.get("data")) or raw
+    slug = data.get("slug") or data.get("req_id") or data.get("id")
+    origin = _origin_from_url(ats_token)
+    url = data.get("url") or data.get("apply_url")
+    if not url and slug and origin:
+        url = f"{origin}/jobs/{slug}"
+    job = _base(
+        company_name=data.get("hiring_organization") or data.get("company") or _company_from_token(ats_token),
+        ats_type="jibeapply",
+        ats_token=ats_token,
+        ats_job_id=data.get("req_id") or data.get("id") or slug,
+        title=data.get("title"),
+        location_raw=data.get("full_location") or _join_parts([data.get("city"), data.get("country")]),
+        description=data.get("description") or data.get("job_description") or data.get("summary"),
+        department=data.get("category") or data.get("department"),
+        url=url,
+        ats_published_at=data.get("posted_date") or data.get("date_posted"),
+        ats_updated_at=data.get("updated_at"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_comeet(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    location = _dict_value(raw.get("location"))
+    remote = "Remote" if location.get("is_remote") else ""
+    description = _join_parts(
+        [
+            raw.get("description"),
+            raw.get("requirements"),
+            raw.get("responsibilities"),
+        ],
+        separator="\n",
+    )
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="comeet",
+        ats_token=ats_token,
+        ats_job_id=raw.get("uid") or raw.get("id") or _id_from_url(raw.get("url_active_page")),
+        title=raw.get("name") or raw.get("title"),
+        location_raw=_join_parts([location.get("name"), remote]),
+        description=description,
+        department=raw.get("department") or raw.get("position_department"),
+        url=raw.get("url_active_page") or raw.get("url_comeet_hosted_page"),
+        ats_published_at=raw.get("time_created"),
+        ats_updated_at=raw.get("time_updated"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
 def _clean_text(value: object) -> str:
     if value is None:
         return ""
@@ -409,5 +603,37 @@ def _title_from_token(token: str) -> str:
     return " ".join(word.capitalize() for word in cleaned.split()) or token
 
 
+def _company_from_token(token: str) -> str:
+    value = token
+    if token.startswith("https://"):
+        value = token.removeprefix("https://").split("/", 1)[0]
+    if "." in value:
+        value = value.split(".", 1)[0]
+    return _title_from_token(value)
+
+
 def _strip_apply_suffix(url: str) -> str:
     return url[:-6] if url.endswith("/apply") else url
+
+
+def _dict_value(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _join_parts(parts: list[object], *, separator: str = ", ") -> str:
+    return separator.join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def _id_from_url(url: object) -> str:
+    text = str(url or "").strip().rstrip("/")
+    if not text:
+        return ""
+    return text.rsplit("/", 1)[-1]
+
+
+def _origin_from_url(url: object) -> str:
+    text = str(url or "").strip()
+    if not text.startswith("http"):
+        return ""
+    parts = text.split("/", 3)
+    return "/".join(parts[:3]) if len(parts) >= 3 else ""

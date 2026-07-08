@@ -46,6 +46,27 @@ def parse_ats_url(url: str) -> ParsedAtsUrl | None:
     if host.endswith(".myworkdayjobs.com"):
         return _parse_workday_url(host, parsed.path, parsed.query)
 
+    if host.endswith(".avature.net"):
+        return _parse_avature_url(host, parsed.path, parsed.query)
+
+    if host.endswith(".bamboohr.com"):
+        return _parse_subdomain_board_url("bamboohr", host)
+
+    if host.endswith(".breezy.hr"):
+        return _parse_subdomain_board_url("breezy", host)
+
+    if host.endswith(".pinpointhq.com"):
+        return _parse_subdomain_board_url("pinpoint", host)
+
+    if host == "ats.rippling.com":
+        return _parse_rippling_url(parsed.path)
+
+    if host.endswith(".jibeapply.com"):
+        return _parse_jibeapply_url(host, parsed.path, parsed.query)
+
+    if host == "comeet.co":
+        return _parse_comeet_url(parsed.path, parsed.query)
+
     ats_type = SUPPORTED_ATS_HOSTS.get(host)
     if not ats_type and host.endswith(".recruitee.com"):
         token = host.removesuffix(".recruitee.com")
@@ -95,6 +116,81 @@ def _parse_workday_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | 
         ats_type="workday",
         ats_token=token,
         company_name_guess=guess_company_name(tenant),
+    )
+
+
+def _parse_avature_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 3:
+        return None
+
+    locale, portal, page = parts[:3]
+    if page not in {"SearchJobs", "JobDetail"}:
+        return None
+
+    token = "|".join([host, locale, portal, "SearchJobs", query])
+    company_token = host.split(".", 1)[0]
+    return ParsedAtsUrl(
+        ats_type="avature",
+        ats_token=token,
+        company_name_guess=guess_company_name(company_token),
+    )
+
+
+def _parse_subdomain_board_url(ats_type: str, host: str) -> ParsedAtsUrl | None:
+    token = host
+    company_token = host.split(".", 1)[0]
+    if not company_token or company_token in {"www", "careers", "jobs"}:
+        return None
+    return ParsedAtsUrl(
+        ats_type=ats_type,
+        ats_token=token,
+        company_name_guess=guess_company_name(company_token),
+    )
+
+
+def _parse_rippling_url(path: str) -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if not parts:
+        return None
+    slug = parts[1] if len(parts) > 1 and _looks_locale(parts[0]) else parts[0]
+    return ParsedAtsUrl(
+        ats_type="rippling",
+        ats_token=slug,
+        company_name_guess=guess_company_name(slug),
+    )
+
+
+def _looks_locale(value: str) -> bool:
+    parts = value.split("-")
+    return len(parts) == 2 and len(parts[0]) == 2 and len(parts[1]) in {2, 3}
+
+
+def _parse_jibeapply_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    if not path or path == "/":
+        path = "/jobs"
+    if not path.startswith("/api/"):
+        path = f"/api{path if path.startswith('/') else '/' + path}"
+    token = f"https://{host}{path}"
+    if query:
+        token = f"{token}?{query}"
+    return ParsedAtsUrl(
+        ats_type="jibeapply",
+        ats_token=token,
+        company_name_guess=guess_company_name(host.split(".", 1)[0]),
+    )
+
+
+def _parse_comeet_url(path: str, query: str = "") -> ParsedAtsUrl | None:
+    if not path.startswith("/careers-api/"):
+        return None
+    token = f"https://www.comeet.co{path}"
+    if query:
+        token = f"{token}?{query}"
+    return ParsedAtsUrl(
+        ats_type="comeet",
+        ats_token=token,
+        company_name_guess="Comeet",
     )
 
 
@@ -164,4 +260,22 @@ def classify_ats_url_kind(url: str) -> str:
         return "job_page" if len(parts) >= 2 and parts[0] == "jobs" else "company_page"
     if host.endswith(".myworkdayjobs.com"):
         return "job_page" if "job" in parts else "company_page"
+    if host.endswith(".avature.net"):
+        return "job_page" if "JobDetail" in parts else "company_page"
+    if host.endswith(".bamboohr.com"):
+        return "job_page" if "careers" in parts and len(parts) >= 2 else "company_page"
+    if host.endswith(".breezy.hr"):
+        return "job_page" if "p" in parts else "company_page"
+    if host.endswith(".pinpointhq.com"):
+        return "job_page" if "postings" in parts and len(parts) >= 2 else "company_page"
+    if host == "ats.rippling.com":
+        if len(parts) >= 3 and parts[1] == "jobs":
+            return "job_page"
+        if len(parts) >= 4 and _looks_locale(parts[0]) and parts[2] == "jobs":
+            return "job_page"
+        return "company_page"
+    if host.endswith(".jibeapply.com"):
+        return "job_page" if "jobs" in parts and len(parts) >= 2 else "company_page"
+    if host == "comeet.co":
+        return "company_page" if parsed.path.startswith("/careers-api/") else "unsupported"
     return "unsupported"

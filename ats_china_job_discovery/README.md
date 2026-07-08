@@ -11,6 +11,15 @@ It does not scrape LinkedIn, Google, Bing, Indeed, Workday, iCIMS, or custom car
 - Ashby
 - SmartRecruiters
 - Recruitee
+- Workday
+- Teamtailor
+- Avature
+- BambooHR
+- Breezy HR
+- Pinpoint
+- Rippling
+- JibeApply
+- Comeet
 
 ## Prepare `data/search_results.csv`
 

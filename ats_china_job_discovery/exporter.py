@@ -15,6 +15,8 @@ RECENT_JOB_COLUMNS = [
     "ats_job_id",
     "title",
     "location_raw",
+    "location_normalized",
+    "is_china",
     "recency_status",
     "fetch_status",
     "ats_published_at",
@@ -47,6 +49,7 @@ def export_csvs(conn: sqlite3.Connection, exports_dir: Path) -> tuple[int, int]:
         """
         SELECT company_name, ats_type, ats_board_token, ats_token, ats_job_id,
                title, location_raw, recency_status, fetch_status, ats_published_at,
+               location_normalized, is_china,
                ats_updated_at, first_seen_at, matched_location_keywords,
                normalized_url, url, jd_text_length, jd_text
         FROM jobs

@@ -17,6 +17,7 @@ JOB_COLUMNS = [
     "location_raw",
     "location_normalized",
     "is_apac",
+    "is_china",
     "ats_type",
     "ats_board_token",
     "recency_status",
@@ -79,6 +80,7 @@ def load_jobs(db_path: str, db_mtime: float) -> pd.DataFrame:
     _ = db_mtime
     query = """
         SELECT id, company_name, title, location_raw, location_normalized, is_apac,
+               is_china,
                ats_type, ats_board_token,
                recency_status, fetch_status, is_current, matched_location_keywords,
                ats_published_at, ats_updated_at,
@@ -318,6 +320,7 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
         "location_raw",
         "location_normalized",
         "is_apac",
+        "is_china",
         "recency_status",
         "matched_location_keywords",
         "ats_type",
@@ -336,6 +339,7 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
             "location_raw": "地点",
             "location_normalized": "标准地点",
             "is_apac": "APAC",
+            "is_china": "China",
             "recency_status": "新鲜度",
             "matched_location_keywords": "命中关键词",
             "ats_type": "ATS",
