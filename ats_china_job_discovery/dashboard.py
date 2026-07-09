@@ -182,6 +182,7 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         only_current = st.checkbox("只看当前有效岗位", value=True)
         only_keyword = st.checkbox("只看 China/APAC 关键词命中", value=True)
         recent_only = st.checkbox("只看近期岗位", value=False)
+        china_only = st.checkbox("只看 China 岗位", value=False)
         apac_only = st.checkbox("只看 APAC 岗位", value=False)
 
         search_text = st.text_input(
@@ -266,6 +267,8 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
                 ["recent_published", "recent_updated", "newly_seen"]
             )
         ]
+    if china_only:
+        df = df[df["is_china"] == 1]
     if apac_only:
         df = df[df["is_apac"] == 1]
     if ats_filter:
