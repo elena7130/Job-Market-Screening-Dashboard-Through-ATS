@@ -1,31 +1,34 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sqlite3
+from typing import Any
 
 import pandas as pd
+import requests
 import streamlit as st
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB = BASE_DIR / "output" / "ats_jobs.clean.db"
+RECENT_STATUSES = {"recent_published", "recent_updated", "newly_seen"}
 
 JOB_COLUMNS = [
     "id",
     "company_name",
+    "ats_type",
+    "ats_token",
+    "ats_board_token",
+    "ats_job_id",
     "title",
     "location_raw",
     "location_normalized",
-    "is_apac",
+    "is_china",
     "is_europe",
     "is_remote",
-    "is_china",
-    "ats_type",
-    "ats_board_token",
     "recency_status",
     "fetch_status",
-    "is_current",
-    "matched_location_keywords",
     "ats_published_at",
     "ats_updated_at",
     "ats_date_normalized",
@@ -34,226 +37,345 @@ JOB_COLUMNS = [
     "ats_age_bucket",
     "first_seen_at",
     "last_seen_at",
-    "jd_text_length",
+    "fetched_at",
+    "matched_location_keywords",
     "normalized_url",
     "url",
+    "jd_text_length",
     "jd_text",
+    "imported_at",
+]
+
+COMPANY_COLUMNS = [
+    "id",
+    "company_name_guess",
+    "ats_type",
+    "ats_token",
+    "api_status",
+    "api_error",
+    "total_open_jobs",
+    "china_keyword_hits",
+    "recent_china_keyword_hits",
+    "sample_url",
+    "discovered_keyword",
+    "source_query",
+    "discovered_at",
+    "last_checked_at",
+    "imported_at",
 ]
 
 
 def main() -> None:
     st.set_page_config(
-        page_title="ATS China Job Dashboard",
-        page_icon="🔎",
+        page_title="China Job Market Dashboard",
+        page_icon=":mag:",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    inject_css()
 
-    st.title("ATS China Job Dashboard")
-    st.caption("本地读取 SQLite 数据库，用于快速筛选 China/APAC 相关岗位。")
+    st.title("China Job Market Dashboard")
+    st.caption("A focused ATS-based job board for China, APAC, Europe, and remote roles.")
 
-    db_path = Path(
-        st.sidebar.text_input("SQLite 数据库路径", value=str(DEFAULT_DB))
-    ).expanduser()
-    if not db_path.exists():
-        st.error(f"数据库不存在: {db_path}")
-        st.stop()
+    data_source = get_data_source()
+    jobs_df, companies_df = load_dashboard_data(data_source)
+    jobs_df = normalize_jobs(jobs_df)
+    companies_df = normalize_companies(companies_df)
 
-    db_mtime = db_path.stat().st_mtime
-    jobs_df = load_jobs(str(db_path), db_mtime)
-    companies_df = load_companies(str(db_path), db_mtime)
-    candidates_df = load_candidates(str(db_path), db_mtime)
+    render_source_status(data_source, jobs_df, companies_df)
+    render_summary(jobs_df, companies_df)
 
-    show_summary(jobs_df, companies_df, candidates_df)
-
-    jobs_tab, companies_tab, candidates_tab = st.tabs(
-        ["岗位筛选", "公司汇总", "候选 URL"]
-    )
+    jobs_tab, companies_tab = st.tabs(["Jobs", "Companies"])
     with jobs_tab:
         render_jobs_tab(jobs_df)
     with companies_tab:
         render_companies_tab(companies_df)
-    with candidates_tab:
-        render_candidates_tab(candidates_df)
 
 
-@st.cache_data(show_spinner=False)
-def load_jobs(db_path: str, db_mtime: float) -> pd.DataFrame:
-    _ = db_mtime
-    query = """
-        SELECT id, company_name, title, location_raw, location_normalized, is_apac,
-               is_europe, is_remote, is_china,
-               ats_type, ats_board_token,
-               recency_status, fetch_status, is_current, matched_location_keywords,
-               ats_published_at, ats_updated_at,
-               ats_date_normalized, ats_date_source, ats_age_days, ats_age_bucket,
-               first_seen_at, last_seen_at,
-               jd_text_length, normalized_url, url, jd_text
-        FROM jobs
-        ORDER BY last_seen_at DESC, company_name, title
-    """
-    return read_sql(db_path, query)
+def get_data_source() -> dict[str, str]:
+    supabase_url = get_secret("SUPABASE_URL")
+    supabase_key = get_secret("SUPABASE_ANON_KEY")
+    jobs_table = get_secret("SUPABASE_JOBS_TABLE") or "china_jobs"
+    companies_table = get_secret("SUPABASE_COMPANIES_TABLE") or "china_companies"
+
+    if supabase_url and supabase_key:
+        return {
+            "type": "supabase",
+            "label": "Supabase",
+            "url": supabase_url.rstrip("/"),
+            "key": supabase_key,
+            "jobs_table": jobs_table,
+            "companies_table": companies_table,
+        }
+
+    return {
+        "type": "sqlite",
+        "label": "Local SQLite",
+        "db_path": str(DEFAULT_DB),
+    }
 
 
-@st.cache_data(show_spinner=False)
-def load_companies(db_path: str, db_mtime: float) -> pd.DataFrame:
-    _ = db_mtime
-    query = """
-        SELECT id, company_name_guess, ats_type, ats_token, api_status, api_error,
-               total_open_jobs, china_keyword_hits, recent_china_keyword_hits,
-               sample_url, discovered_keyword, source_query, discovered_at,
-               last_checked_at
-        FROM discovered_companies
-        ORDER BY recent_china_keyword_hits DESC, china_keyword_hits DESC,
-                 company_name_guess, ats_type, ats_token
-    """
-    return read_sql(db_path, query)
+def get_secret(name: str) -> str:
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:
+        value = ""
+    return str(value or os.environ.get(name, "")).strip()
 
 
-@st.cache_data(show_spinner=False)
-def load_candidates(db_path: str, db_mtime: float) -> pd.DataFrame:
-    _ = db_mtime
-    query = """
-        SELECT id, status, source, source_query, result_title, result_url,
-               discovered_keyword, ats_type, ats_token, company_name_guess,
-               url_kind, discovered_at, reviewed_at, notes
-        FROM discovery_candidates
-        ORDER BY discovered_at DESC, source_query, result_url
-    """
-    return read_sql(db_path, query)
+@st.cache_data(show_spinner="Loading dashboard data...", ttl=300)
+def load_dashboard_data(data_source: dict[str, str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if data_source["type"] == "supabase":
+        jobs_df = load_supabase_table(
+            data_source["url"],
+            data_source["key"],
+            data_source["jobs_table"],
+            JOB_COLUMNS,
+            order="last_seen_at.desc",
+        )
+        companies_df = load_supabase_table(
+            data_source["url"],
+            data_source["key"],
+            data_source["companies_table"],
+            COMPANY_COLUMNS,
+            order="recent_china_keyword_hits.desc",
+        )
+        return jobs_df, companies_df
+
+    db_path = Path(data_source["db_path"])
+    if not db_path.exists():
+        return pd.DataFrame(columns=JOB_COLUMNS), pd.DataFrame(columns=COMPANY_COLUMNS)
+
+    return load_sqlite_data(db_path)
 
 
-def read_sql(db_path: str, query: str) -> pd.DataFrame:
-    read_only_uri = f"file:{Path(db_path).resolve().as_posix()}?mode=ro"
+def load_supabase_table(
+    supabase_url: str,
+    supabase_key: str,
+    table: str,
+    columns: list[str],
+    *,
+    order: str,
+    page_size: int = 1000,
+    max_rows: int = 50000,
+) -> pd.DataFrame:
+    endpoint = f"{supabase_url}/rest/v1/{table}"
+    headers = {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+    }
+    rows: list[dict[str, Any]] = []
+
+    for offset in range(0, max_rows, page_size):
+        params = {
+            "select": ",".join(columns),
+            "order": order,
+            "limit": str(page_size),
+            "offset": str(offset),
+        }
+        response = requests.get(endpoint, headers=headers, params=params, timeout=30)
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Supabase request failed for {table}: "
+                f"{response.status_code} {response.text[:500]}"
+            )
+        batch = response.json()
+        if not batch:
+            break
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def load_sqlite_data(db_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    read_only_uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
     with sqlite3.connect(read_only_uri, uri=True, timeout=30) as conn:
         conn.execute("PRAGMA busy_timeout=30000")
-        return pd.read_sql_query(query, conn).fillna("")
+        jobs_df = pd.read_sql_query(
+            """
+            SELECT id, company_name, ats_type, ats_token, ats_board_token, ats_job_id,
+                   title, location_raw, location_normalized, is_china, is_europe,
+                   is_remote, recency_status, fetch_status, ats_published_at,
+                   ats_updated_at, ats_date_normalized, ats_date_source, ats_age_days,
+                   ats_age_bucket, first_seen_at, last_seen_at, fetched_at,
+                   matched_location_keywords, normalized_url, url, jd_text_length,
+                   jd_text
+            FROM jobs
+            WHERE is_current = 1
+            ORDER BY last_seen_at DESC, company_name, title
+            """,
+            conn,
+        )
+        companies_df = pd.read_sql_query(
+            """
+            SELECT id, company_name_guess, ats_type, ats_token, api_status, api_error,
+                   total_open_jobs, china_keyword_hits, recent_china_keyword_hits,
+                   sample_url, discovered_keyword, source_query, discovered_at,
+                   last_checked_at
+            FROM discovered_companies
+            ORDER BY recent_china_keyword_hits DESC, china_keyword_hits DESC,
+                     company_name_guess, ats_type, ats_token
+            """,
+            conn,
+        )
+    return jobs_df, companies_df
 
 
-def show_summary(
-    jobs_df: pd.DataFrame, companies_df: pd.DataFrame, candidates_df: pd.DataFrame
+def normalize_jobs(df: pd.DataFrame) -> pd.DataFrame:
+    df = ensure_columns(df, JOB_COLUMNS)
+    df = df.fillna("")
+
+    for column in ["is_china", "is_europe", "is_remote"]:
+        df[column] = df[column].apply(to_bool)
+
+    df["is_apac"] = df["is_china"] | df["matched_location_keywords"].astype(str).str.contains(
+        "APAC|Asia|Asia Pacific", case=False, na=False
+    )
+    df["is_recent"] = df["recency_status"].isin(RECENT_STATUSES)
+    df["display_location"] = df["location_normalized"].where(
+        df["location_normalized"].astype(str).str.len() > 0,
+        df["location_raw"],
+    )
+    df["job_url"] = df["normalized_url"].where(
+        df["normalized_url"].astype(str).str.len() > 0,
+        df["url"],
+    )
+    df["company_name"] = df["company_name"].replace("", "Unknown company")
+    df["title"] = df["title"].replace("", "Untitled role")
+
+    numeric_columns = ["ats_age_days", "jd_text_length"]
+    for column in numeric_columns:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    return df
+
+
+def normalize_companies(df: pd.DataFrame) -> pd.DataFrame:
+    df = ensure_columns(df, COMPANY_COLUMNS)
+    df = df.fillna("")
+
+    for column in ["total_open_jobs", "china_keyword_hits", "recent_china_keyword_hits"]:
+        df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).astype(int)
+
+    df["company_name_guess"] = df["company_name_guess"].replace("", "Unknown company")
+    return df
+
+
+def ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    for column in columns:
+        if column not in df.columns:
+            df[column] = ""
+    return df.loc[:, columns]
+
+
+def to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def render_source_status(
+    data_source: dict[str, str], jobs_df: pd.DataFrame, companies_df: pd.DataFrame
 ) -> None:
-    current_jobs = int((jobs_df["is_current"] == 1).sum()) if not jobs_df.empty else 0
+    if data_source["type"] == "supabase":
+        imported_values = pd.concat(
+            [
+                jobs_df["imported_at"].astype(str),
+                companies_df["imported_at"].astype(str),
+            ],
+            ignore_index=True,
+        )
+        imported_values = imported_values[imported_values.str.len() > 0]
+        last_imported = imported_values.max() if not imported_values.empty else "Unknown"
+        st.info(
+            f"Data source: Supabase | Jobs table: `{data_source['jobs_table']}` | "
+            f"Companies table: `{data_source['companies_table']}` | "
+            f"Last import: {last_imported}"
+        )
+        return
+
+    db_path = Path(data_source["db_path"])
+    if db_path.exists():
+        st.info(f"Data source: Local SQLite | `{db_path}`")
+    else:
+        st.warning(
+            "No Supabase credentials are configured and the local SQLite database was "
+            f"not found at `{db_path}`."
+        )
+
+
+def render_summary(jobs_df: pd.DataFrame, companies_df: pd.DataFrame) -> None:
     keyword_jobs = int(
-        (
-            (jobs_df["is_current"] == 1)
-            & (jobs_df["matched_location_keywords"].astype(str).str.len() > 0)
-        ).sum()
+        jobs_df["matched_location_keywords"].astype(str).str.len().gt(0).sum()
     ) if not jobs_df.empty else 0
-    recent_keyword_jobs = int(
-        (
-            (jobs_df["is_current"] == 1)
-            & (jobs_df["matched_location_keywords"].astype(str).str.len() > 0)
-            & (
-                jobs_df["recency_status"].isin(
-                    ["recent_published", "recent_updated", "newly_seen"]
-                )
-            )
-        ).sum()
-    ) if not jobs_df.empty else 0
+    recent_jobs = int(jobs_df["is_recent"].sum()) if not jobs_df.empty else 0
+    china_jobs = int(jobs_df["is_china"].sum()) if not jobs_df.empty else 0
+    remote_jobs = int(jobs_df["is_remote"].sum()) if not jobs_df.empty else 0
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("全部岗位", f"{len(jobs_df):,}")
-    col2.metric("当前有效", f"{current_jobs:,}")
-    col3.metric("关键词命中", f"{keyword_jobs:,}")
-    col4.metric("近期命中", f"{recent_keyword_jobs:,}")
-    col5.metric("公司", f"{len(companies_df):,}")
+    col1.metric("Jobs", f"{len(jobs_df):,}")
+    col2.metric("Recent", f"{recent_jobs:,}")
+    col3.metric("China", f"{china_jobs:,}")
+    col4.metric("Remote", f"{remote_jobs:,}")
+    col5.metric("Companies", f"{len(companies_df):,}")
 
-    if not candidates_df.empty:
-        st.caption(f"候选 URL: {len(candidates_df):,} 条")
+    st.caption(f"Keyword-matched roles: {keyword_jobs:,}")
 
 
 def render_jobs_tab(jobs_df: pd.DataFrame) -> None:
     if jobs_df.empty:
-        st.info("jobs 表暂无数据。先运行 `python main.py` 抓取岗位。")
+        st.info("No jobs found. Sync data to Supabase or run the local collector first.")
         return
 
-    st.subheader("岗位筛选")
     filtered_df = filter_jobs(jobs_df)
-
-    left, right = st.columns([0.72, 0.28], gap="large")
-    with left:
-        render_jobs_table(filtered_df)
-    with right:
-        render_job_detail(filtered_df)
+    render_jobs_table(filtered_df)
+    st.divider()
+    render_job_detail(filtered_df)
 
 
 def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
     with st.sidebar:
-        st.header("岗位筛选")
-        only_current = st.checkbox("只看当前有效岗位", value=True)
-        only_keyword = st.checkbox("只看 China/APAC 关键词命中", value=True)
-        recent_only = st.checkbox("只看近期岗位", value=False)
-        china_only = st.checkbox("只看 China 岗位", value=False)
-        apac_only = st.checkbox("只看 APAC 岗位", value=False)
-        europe_only = st.checkbox("Only Europe jobs", value=False)
-        remote_only = st.checkbox("Only Remote jobs", value=False)
-
+        st.header("Filters")
         search_text = st.text_input(
-            "全文搜索",
-            placeholder="公司、标题、地点、关键词、JD...",
+            "Search",
+            placeholder="Company, title, location, keyword, JD...",
         ).strip()
 
-        ats_options = sorted(jobs_df["ats_type"].dropna().astype(str).unique())
-        ats_filter = st.multiselect("ATS 类型", ats_options)
+        only_recent = st.toggle("Recent roles only", value=False)
+        only_keyword = st.toggle("Keyword matches only", value=True)
+        china_only = st.toggle("China only", value=False)
+        apac_only = st.toggle("APAC only", value=False)
+        europe_only = st.toggle("Europe only", value=False)
+        remote_only = st.toggle("Remote only", value=False)
 
-        recency_options = sorted(
-            jobs_df["recency_status"].dropna().astype(str).unique()
-        )
-        recency_filter = st.multiselect("Recency", recency_options)
-
-        fetch_options = sorted(jobs_df["fetch_status"].dropna().astype(str).unique())
-        fetch_filter = st.multiselect("Fetch status", fetch_options)
-
-        available_buckets = set(jobs_df["ats_age_bucket"].dropna().astype(str))
-        bucket_order = [
-            "0-7 days",
-            "8-14 days",
-            "15-30 days",
-            "31-60 days",
-            "60+ days",
-            "unknown",
-        ]
-        age_bucket_options = [
-            bucket for bucket in bucket_order if bucket in available_buckets
-        ]
+        ats_filter = st.multiselect("ATS platform", options_for(jobs_df, "ats_type"))
+        recency_filter = st.multiselect("Recency", options_for(jobs_df, "recency_status"))
         age_bucket_filter = st.multiselect(
-            "ATS 发布时间范围",
-            age_bucket_options,
+            "ATS age bucket",
+            ordered_age_buckets(jobs_df),
             default=[
                 bucket
                 for bucket in ["0-7 days", "8-14 days", "15-30 days"]
-                if bucket in age_bucket_options
+                if bucket in set(jobs_df["ats_age_bucket"].astype(str))
             ],
         )
 
-        company_options = sorted(
-            jobs_df["company_name"].dropna().astype(str).unique()
+        company_filter = st.multiselect(
+            "Company",
+            options_for(jobs_df, "company_name"),
+            max_selections=25,
         )
-        company_filter = st.multiselect("公司", company_options)
-
-        title_filter = st.text_input(
-            "岗位名称搜索",
-            placeholder="输入岗位名称关键词...",
-        ).strip()
-
-
-        location_counts = (
-            jobs_df["location_normalized"]
-            .astype(str)
-            .replace("", pd.NA)
-            .dropna()
-            .value_counts()
-        )
-        location_options = location_counts.index.tolist()
         location_filter = st.multiselect(
-            "地点 / Location",
-            location_options,
-            format_func=lambda location: f"{location} ({location_counts[location]:,})",
+            "Location",
+            options_for(jobs_df, "display_location"),
+            max_selections=25,
         )
-
         max_rows = st.number_input(
-            "表格最多显示行数",
+            "Rows to display",
             min_value=50,
             max_value=5000,
             value=1000,
@@ -261,42 +383,28 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         )
 
     df = jobs_df.copy()
-    if only_current:
-        df = df[df["is_current"] == 1]
+    if only_recent:
+        df = df[df["is_recent"]]
     if only_keyword:
         df = df[df["matched_location_keywords"].astype(str).str.len() > 0]
-    if recent_only:
-        df = df[
-            df["recency_status"].isin(
-                ["recent_published", "recent_updated", "newly_seen"]
-            )
-        ]
     if china_only:
-        df = df[df["is_china"] == 1]
+        df = df[df["is_china"]]
     if apac_only:
-        df = df[df["is_apac"] == 1]
+        df = df[df["is_apac"]]
     if europe_only:
-        df = df[df["is_europe"] == 1]
+        df = df[df["is_europe"]]
     if remote_only:
-        df = df[df["is_remote"] == 1]
+        df = df[df["is_remote"]]
     if ats_filter:
         df = df[df["ats_type"].isin(ats_filter)]
     if recency_filter:
         df = df[df["recency_status"].isin(recency_filter)]
-    if fetch_filter:
-        df = df[df["fetch_status"].isin(fetch_filter)]
     if age_bucket_filter:
         df = df[df["ats_age_bucket"].astype(str).isin(age_bucket_filter)]
     if company_filter:
         df = df[df["company_name"].isin(company_filter)]
-    if title_filter:
-        df = df[
-            df["title"].astype(str).str.contains(
-                title_filter, case=False, na=False, regex=False
-            )
-        ]
     if location_filter:
-        df = df[df["location_normalized"].isin(location_filter)]
+        df = df[df["display_location"].isin(location_filter)]
     if search_text:
         search_columns = [
             "company_name",
@@ -313,58 +421,44 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
             )
         df = df[mask]
 
-    df = df.sort_values(
+    st.session_state["jobs_display_limit"] = int(max_rows)
+    return df.sort_values(
         by=["last_seen_at", "company_name", "title"],
         ascending=[False, True, True],
     )
-    st.session_state["jobs_display_limit"] = int(max_rows)
-    return df
 
 
 def render_jobs_table(filtered_df: pd.DataFrame) -> None:
     limit = st.session_state.get("jobs_display_limit", 1000)
-    st.write(f"筛选结果: **{len(filtered_df):,}** 条")
+    st.subheader("Job Results")
+    st.write(f"{len(filtered_df):,} matching roles")
 
     display_columns = [
         "company_name",
         "title",
-        "location_raw",
-        "location_normalized",
+        "display_location",
+        "is_china",
         "is_apac",
         "is_europe",
         "is_remote",
-        "is_china",
         "recency_status",
-        "matched_location_keywords",
-        "ats_type",
-        "fetch_status",
-        "ats_published_at",
-        "ats_date_normalized",
-        "ats_age_days",
         "ats_age_bucket",
-        "first_seen_at",
-        "normalized_url",
+        "ats_type",
+        "job_url",
     ]
     display_df = filtered_df.head(limit).loc[:, display_columns].rename(
         columns={
-            "company_name": "公司",
-            "title": "岗位名称",
-            "location_raw": "地点",
-            "location_normalized": "标准地点",
+            "company_name": "Company",
+            "title": "Role",
+            "display_location": "Location",
+            "is_china": "China",
             "is_apac": "APAC",
             "is_europe": "Europe",
             "is_remote": "Remote",
-            "is_china": "China",
-            "recency_status": "新鲜度",
-            "matched_location_keywords": "命中关键词",
+            "recency_status": "Recency",
+            "ats_age_bucket": "Age",
             "ats_type": "ATS",
-            "fetch_status": "抓取状态",
-            "ats_published_at": "发布时间",
-            "ats_date_normalized": "ATS日期",
-            "ats_age_days": "ATS天数",
-            "ats_age_bucket": "ATS范围",
-            "first_seen_at": "首次发现",
-            "normalized_url": "链接",
+            "job_url": "Link",
         }
     )
 
@@ -374,13 +468,14 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
         hide_index=True,
         height=620,
         column_config={
-            "链接": st.column_config.LinkColumn("链接", display_text="打开"),
+            "Link": st.column_config.LinkColumn("Link", display_text="Open"),
         },
     )
 
-    csv = filtered_df.loc[:, JOB_COLUMNS].to_csv(index=False).encode("utf-8-sig")
+    export_columns = [column for column in JOB_COLUMNS if column in filtered_df.columns]
+    csv = filtered_df.loc[:, export_columns].to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "下载当前筛选结果 CSV",
+        "Download filtered CSV",
         data=csv,
         file_name="filtered_jobs.csv",
         mime="text/csv",
@@ -388,69 +483,84 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
 
 
 def render_job_detail(filtered_df: pd.DataFrame) -> None:
-    st.subheader("岗位详情")
+    st.subheader("Job Detail")
     if filtered_df.empty:
-        st.info("没有符合当前筛选条件的岗位。")
+        st.info("No roles match the current filters.")
         return
 
     detail_df = filtered_df.head(st.session_state.get("jobs_display_limit", 1000))
-    labels = {
-        make_job_label(row): int(row["id"])
-        for _, row in detail_df.iterrows()
-    }
-    selected_label = st.selectbox("选择一条岗位查看详情", list(labels.keys()))
+    labels = {make_job_label(row): row["id"] for _, row in detail_df.iterrows()}
+    selected_label = st.selectbox("Select a role", list(labels.keys()))
     selected_id = labels[selected_label]
     row = detail_df[detail_df["id"] == selected_id].iloc[0]
 
-    st.markdown(f"**岗位名称：{row['title']}**")
-    st.write(row["company_name"] or "Unknown company")
-    st.write(row["location_normalized"] or row["location_raw"] or "Unknown location")
+    header_left, header_right = st.columns([0.72, 0.28], gap="large")
+    with header_left:
+        st.markdown(f"### {row['title']}")
+        st.write(row["company_name"])
+        st.write(row["display_location"] or "Unknown location")
 
-    url = row["normalized_url"] or row["url"]
-    if url:
-        st.link_button("打开岗位链接", url)
+    with header_right:
+        url = str(row["job_url"] or "")
+        if url:
+            st.link_button("Open job posting", url)
 
-    st.text_input("Recency", value=str(row["recency_status"]), disabled=True)
-    st.text_input("命中关键词", value=str(row["matched_location_keywords"]), disabled=True)
-    st.text_input("发布时间", value=str(row["ats_published_at"]), disabled=True)
-    st.text_input("更新时间", value=str(row["ats_updated_at"]), disabled=True)
-    st.text_input("ATS日期", value=str(row["ats_date_normalized"]), disabled=True)
-    st.text_input("ATS日期来源", value=str(row["ats_date_source"]), disabled=True)
-    st.text_input("ATS年龄范围", value=str(row["ats_age_bucket"]), disabled=True)
-    st.text_input("首次发现", value=str(row["first_seen_at"]), disabled=True)
+    detail_fields = {
+        "Recency": row["recency_status"],
+        "Matched keywords": row["matched_location_keywords"],
+        "Published": row["ats_published_at"],
+        "Updated": row["ats_updated_at"],
+        "ATS date": row["ats_date_normalized"],
+        "ATS date source": row["ats_date_source"],
+        "ATS age": row["ats_age_bucket"],
+        "First seen": row["first_seen_at"],
+        "Last seen": row["last_seen_at"],
+        "ATS platform": row["ats_type"],
+    }
+    field_columns = st.columns(5)
+    for index, (label, value) in enumerate(detail_fields.items()):
+        with field_columns[index % len(field_columns)]:
+            st.text_input(label, value=str(value or ""), disabled=True)
 
-    jd_text = str(row["jd_text"] or "")
-    st.text_area("JD 文本", value=jd_text, height=360, disabled=True)
+    st.text_area(
+        "Job description",
+        value=str(row["jd_text"] or ""),
+        height=520,
+        disabled=True,
+    )
 
 
 def make_job_label(row: pd.Series) -> str:
-    company = str(row.get("company_name") or "Unknown")
-    title = str(row.get("title") or "Untitled")
-    location = str(row.get("location_raw") or "")
+    company = str(row.get("company_name") or "Unknown company")
+    title = str(row.get("title") or "Untitled role")
+    location = str(row.get("display_location") or "")
     job_id = row.get("id")
-    label = f"{company} | {title}"
+    pieces = [company, title]
     if location:
-        label += f" | {location}"
-    return f"{label} | #{job_id}"
+        pieces.append(location)
+    pieces.append(f"#{job_id}")
+    return " | ".join(pieces)
 
 
 def render_companies_tab(companies_df: pd.DataFrame) -> None:
-    st.subheader("公司汇总")
+    st.subheader("Companies")
     if companies_df.empty:
-        st.info("discovered_companies 表暂无数据。")
+        st.info("No companies found.")
         return
 
-    status_options = sorted(companies_df["api_status"].astype(str).unique())
-    selected_status = st.multiselect("API 状态", status_options)
-    only_hits = st.checkbox("只看有 China/APAC 命中岗位的公司", value=True)
+    col1, col2 = st.columns([0.35, 0.65])
+    with col1:
+        status_filter = st.multiselect("API status", options_for(companies_df, "api_status"))
+    with col2:
+        only_hits = st.toggle("Companies with China/APAC hits only", value=True)
 
     df = companies_df.copy()
-    if selected_status:
-        df = df[df["api_status"].isin(selected_status)]
+    if status_filter:
+        df = df[df["api_status"].isin(status_filter)]
     if only_hits:
-        df = df[df["china_keyword_hits"].fillna(0).astype(int) > 0]
+        df = df[df["china_keyword_hits"] > 0]
 
-    st.write(f"筛选结果: **{len(df):,}** 家公司")
+    st.write(f"{len(df):,} matching companies")
     display_columns = [
         "company_name_guess",
         "ats_type",
@@ -462,86 +572,68 @@ def render_companies_tab(companies_df: pd.DataFrame) -> None:
         "last_checked_at",
         "sample_url",
     ]
+    display_df = df.loc[:, display_columns].rename(
+        columns={
+            "company_name_guess": "Company",
+            "ats_type": "ATS",
+            "ats_token": "Token",
+            "api_status": "API status",
+            "total_open_jobs": "Open roles",
+            "china_keyword_hits": "China/APAC hits",
+            "recent_china_keyword_hits": "Recent hits",
+            "last_checked_at": "Last checked",
+            "sample_url": "Sample URL",
+        }
+    )
     st.dataframe(
-        df.loc[:, display_columns].rename(
-            columns={
-                "company_name_guess": "公司",
-                "ats_type": "ATS",
-                "ats_token": "Token",
-                "api_status": "API 状态",
-                "total_open_jobs": "开放岗位",
-                "china_keyword_hits": "关键词命中",
-                "recent_china_keyword_hits": "近期命中",
-                "last_checked_at": "最近检查",
-                "sample_url": "样例 URL",
-            }
-        ),
+        display_df,
         width="stretch",
         hide_index=True,
         height=620,
         column_config={
-            "样例 URL": st.column_config.LinkColumn("样例 URL", display_text="打开"),
+            "Sample URL": st.column_config.LinkColumn("Sample URL", display_text="Open"),
         },
     )
 
 
-def render_candidates_tab(candidates_df: pd.DataFrame) -> None:
-    st.subheader("候选 URL")
-    if candidates_df.empty:
-        st.info("discovery_candidates 表暂无数据。")
-        return
+def options_for(df: pd.DataFrame, column: str) -> list[str]:
+    if column not in df.columns:
+        return []
+    return sorted(value for value in df[column].dropna().astype(str).unique() if value)
 
-    status_options = sorted(candidates_df["status"].astype(str).unique())
-    selected_status = st.multiselect("审核状态", status_options, default=[])
-    search_text = st.text_input("候选 URL 搜索", placeholder="公司、URL、query...")
 
-    df = candidates_df.copy()
-    if selected_status:
-        df = df[df["status"].isin(selected_status)]
-    if search_text:
-        mask = pd.Series(False, index=df.index)
-        for column in ["company_name_guess", "result_url", "source_query", "notes"]:
-            mask |= df[column].astype(str).str.contains(
-                search_text, case=False, na=False, regex=False
-            )
-        df = df[mask]
-
-    st.write(f"筛选结果: **{len(df):,}** 条")
-    display_columns = [
-        "status",
-        "company_name_guess",
-        "ats_type",
-        "ats_token",
-        "url_kind",
-        "source_query",
-        "result_title",
-        "result_url",
-        "discovered_keyword",
-        "discovered_at",
-        "notes",
+def ordered_age_buckets(df: pd.DataFrame) -> list[str]:
+    available = set(df["ats_age_bucket"].dropna().astype(str))
+    ordered = [
+        "0-7 days",
+        "8-14 days",
+        "15-30 days",
+        "31-60 days",
+        "60+ days",
+        "unknown",
     ]
-    st.dataframe(
-        df.loc[:, display_columns].rename(
-            columns={
-                "status": "状态",
-                "company_name_guess": "公司",
-                "ats_type": "ATS",
-                "ats_token": "Token",
-                "url_kind": "URL 类型",
-                "source_query": "搜索 Query",
-                "result_title": "标题",
-                "result_url": "URL",
-                "discovered_keyword": "关键词",
-                "discovered_at": "发现时间",
-                "notes": "备注",
-            }
-        ),
-        width="stretch",
-        hide_index=True,
-        height=620,
-        column_config={
-            "URL": st.column_config.LinkColumn("URL", display_text="打开"),
-        },
+    return [bucket for bucket in ordered if bucket in available]
+
+
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 2rem;
+        }
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+        div[data-testid="stMetric"] label {
+            color: #475569;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
 
 

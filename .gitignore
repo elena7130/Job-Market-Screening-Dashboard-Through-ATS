@@ -7,6 +7,7 @@ venv/
 # Secrets and local environment
 .env
 .env.*
+.streamlit/secrets.toml
 
 # Local runtime inputs
 ats_china_job_discovery/data/search_results.csv
