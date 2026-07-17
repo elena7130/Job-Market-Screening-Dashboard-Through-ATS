@@ -1,0 +1,65 @@
+name: Daily Supabase Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Runs every day at 08:30 Asia/Shanghai.
+    - cron: "30 0 * * *"
+
+concurrency:
+  group: daily-supabase-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Fetch jobs and upload to Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    defaults:
+      run:
+        working-directory: ats_china_job_discovery
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      SEARCH_RESULTS_CSV: ${{ secrets.SEARCH_RESULTS_CSV }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: ats_china_job_discovery/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Prepare search results input
+        shell: bash
+        run: |
+          if [ -s data/search_results.csv ]; then
+            echo "Using data/search_results.csv from the repository."
+          elif [ -n "$SEARCH_RESULTS_CSV" ]; then
+            printf '%s\n' "$SEARCH_RESULTS_CSV" > data/search_results.csv
+            echo "Created data/search_results.csv from SEARCH_RESULTS_CSV secret."
+          else
+            echo "::error::data/search_results.csv is not committed and SEARCH_RESULTS_CSV secret is empty."
+            exit 1
+          fi
+
+      - name: Validate Supabase secrets
+        shell: bash
+        run: |
+          test -n "$SUPABASE_URL" || (echo "::error::Missing SUPABASE_URL secret." && exit 1)
+          test -n "$SUPABASE_SERVICE_ROLE_KEY" || (echo "::error::Missing SUPABASE_SERVICE_ROLE_KEY secret." && exit 1)
+
+      - name: Fetch and clean jobs
+        run: python main.py --rebuild-clean-db
+
+      - name: Upload current China jobs to Supabase
+        run: python upload_china_to_supabase.py --export-first
