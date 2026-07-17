@@ -16,6 +16,9 @@ DETAIL_WORKERS = 6
 
 def fetch_jobs(ats_token: str) -> list[dict[str, Any]]:
     base_url = _board_url(ats_token)
+    if "/jobs/" in base_url:
+        return [_fetch_job_detail(base_url)]
+
     listing_html = _get_text(base_url)
     links = _extract_job_links(listing_html, base_url)
 

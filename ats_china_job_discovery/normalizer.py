@@ -21,6 +21,16 @@ def normalize_job(ats_type: str, ats_token: str, raw: dict[str, Any]) -> dict[st
         return _normalize_workday(ats_token, raw)
     if ats_type == "thermofisher":
         return _normalize_thermofisher(ats_token, raw)
+    if ats_type == "radancy":
+        return _normalize_radancy(ats_token, raw)
+    if ats_type == "oracle_hcm":
+        return _normalize_oracle_hcm(ats_token, raw)
+    if ats_type == "smartsearchonline":
+        return _normalize_smartsearchonline(ats_token, raw)
+    if ats_type == "successfactors_rmk":
+        return _normalize_successfactors_rmk(ats_token, raw)
+    if ats_type == "successfactors_unified":
+        return _normalize_successfactors_unified(ats_token, raw)
     if ats_type == "teamtailor":
         return _normalize_teamtailor(ats_token, raw)
     if ats_type == "avature":
@@ -284,6 +294,112 @@ def _normalize_thermofisher(ats_token: str, raw: dict[str, Any]) -> dict[str, An
         raw=raw,
         company_name="Thermo Fisher Scientific",
     )
+
+
+def _normalize_radancy(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="radancy",
+        ats_token=ats_token,
+        ats_job_id=raw.get("ats_job_id") or _id_from_url(raw.get("url")),
+        title=raw.get("title"),
+        location_raw=raw.get("location"),
+        description=raw.get("description"),
+        department=raw.get("department"),
+        url=raw.get("url") or raw.get("apply_url"),
+        ats_published_at=raw.get("date_posted") or raw.get("datePosted"),
+        ats_updated_at=raw.get("date_updated") or raw.get("dateUpdated"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_oracle_hcm(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    host = raw.get("_oracle_hcm_host") or _oracle_hcm_host_from_token(ats_token)
+    site_number = raw.get("_oracle_hcm_site_number") or _oracle_hcm_site_from_token(ats_token)
+    job_id = raw.get("Id") or raw.get("RequisitionId")
+    description = _join_parts(
+        [
+            raw.get("ExternalDescriptionStr") or raw.get("ShortDescriptionStr"),
+            raw.get("ExternalResponsibilitiesStr"),
+            raw.get("ExternalQualificationsStr"),
+        ],
+        separator="\n",
+    )
+    job = _base(
+        company_name=_oracle_hcm_company_name(host, raw),
+        ats_type="oracle_hcm",
+        ats_token=ats_token,
+        ats_job_id=job_id,
+        title=raw.get("Title"),
+        location_raw=_oracle_hcm_location(raw),
+        description=description,
+        department=raw.get("Category") or raw.get("JobFunction") or raw.get("Department"),
+        url=f"https://{host}/hcmUI/CandidateExperience/en/sites/{_oracle_hcm_site_url_key(host, site_number)}/job/{job_id}",
+        ats_published_at=raw.get("ExternalPostedStartDate") or raw.get("PostedDate"),
+        ats_updated_at=raw.get("LastUpdateDate") or raw.get("ExternalPostedEndDate"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_smartsearchonline(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    hiring_org = _dict_value(raw.get("hiringOrganization"))
+    job = _base(
+        company_name=hiring_org.get("name") or _company_from_token(ats_token),
+        ats_type="smartsearchonline",
+        ats_token=ats_token,
+        ats_job_id=raw.get("_smartsearchonline_job_id") or _id_from_url(raw.get("_smartsearchonline_url")),
+        title=raw.get("title"),
+        location_raw=_smartsearchonline_location(raw.get("jobLocation")),
+        description=raw.get("description"),
+        department=raw.get("occupationalCategory") or raw.get("employmentType"),
+        url=raw.get("_smartsearchonline_url") or raw.get("url"),
+        ats_published_at=raw.get("datePosted"),
+        ats_updated_at=raw.get("validThrough"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_successfactors_rmk(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="successfactors_rmk",
+        ats_token=ats_token,
+        ats_job_id=raw.get("ats_job_id") or _id_from_url(raw.get("url")),
+        title=raw.get("title"),
+        location_raw=raw.get("location"),
+        description=raw.get("description"),
+        department=raw.get("department"),
+        url=raw.get("url"),
+        ats_published_at=raw.get("date_posted"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
+
+
+def _normalize_successfactors_unified(ats_token: str, raw: dict[str, Any]) -> dict[str, Any]:
+    job = _base(
+        company_name=raw.get("company_name") or _company_from_token(ats_token),
+        ats_type="successfactors_unified",
+        ats_token=ats_token,
+        ats_job_id=raw.get("ats_job_id") or _id_from_url(raw.get("url")),
+        title=raw.get("title"),
+        location_raw=raw.get("location"),
+        description=raw.get("description"),
+        department=raw.get("department"),
+        url=raw.get("url"),
+        ats_published_at=raw.get("date_posted"),
+        ats_updated_at=raw.get("date_updated"),
+        raw=raw,
+    )
+    job["normalized_url"] = job["url"]
+    return job
 
 
 def _normalize_workday_like(
@@ -637,3 +753,76 @@ def _origin_from_url(url: object) -> str:
         return ""
     parts = text.split("/", 3)
     return "/".join(parts[:3]) if len(parts) >= 3 else ""
+
+
+def _oracle_hcm_host_from_token(ats_token: str) -> str:
+    return ats_token.split("|", 1)[0]
+
+
+def _oracle_hcm_site_from_token(ats_token: str) -> str:
+    parts = ats_token.split("|", 2)
+    return parts[1] if len(parts) > 1 else ""
+
+
+def _oracle_hcm_site_url_key(host: object, site_number: object) -> str:
+    known_site_keys = {
+        ("ibqbjb.fa.ocs.oraclecloud.com", "CX_1"): "Honeywell",
+    }
+    text_host = str(host or "")
+    text_site = str(site_number or "")
+    return known_site_keys.get((text_host, text_site), text_site)
+
+
+def _oracle_hcm_company_name(host: object, raw: dict[str, Any]) -> str:
+    text_host = str(host or "")
+    known_hosts = {
+        "hdjq.fa.us2.oraclecloud.com": "Emerson",
+        "ibqbjb.fa.ocs.oraclecloud.com": "Honeywell",
+    }
+    return (
+        raw.get("Organization")
+        or raw.get("LegalEmployer")
+        or raw.get("BusinessUnit")
+        or known_hosts.get(text_host)
+        or _company_from_token(text_host)
+    )
+
+
+def _oracle_hcm_location(raw: dict[str, Any]) -> str:
+    parts = [raw.get("PrimaryLocation")]
+    parts.extend(_oracle_hcm_location_names(raw.get("secondaryLocations")))
+    parts.extend(_oracle_hcm_location_names(raw.get("otherWorkLocations")))
+    return " | ".join(dict.fromkeys(str(part).strip() for part in parts if str(part or "").strip()))
+
+
+def _oracle_hcm_location_names(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            name = item.get("Name") or item.get("LocationName") or item.get("PrimaryLocation")
+        else:
+            name = item
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _smartsearchonline_location(value: object) -> str:
+    locations = value if isinstance(value, list) else [value]
+    parts: list[str] = []
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        address = _dict_value(location.get("address"))
+        text = _join_parts(
+            [
+                address.get("addressLocality"),
+                address.get("addressRegion"),
+                address.get("addressCountry"),
+            ]
+        )
+        if text:
+            parts.append(text)
+    return " | ".join(parts)

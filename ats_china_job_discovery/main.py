@@ -14,7 +14,7 @@ import clean_database
 import db
 from exporter import export_csvs
 from fetchers.common import FetchError
-from keywords import find_location_keywords, is_apac_job
+from keywords import find_location_keywords, is_apac_job, is_europe_job, is_remote_job
 from normalizer import normalize_job
 from parsers import parse_ats_url
 from recency import RECENT_STATUSES, classify_recency
@@ -254,6 +254,8 @@ def process_company(conn: Any, company: Any, run_stats: dict[str, int]) -> None:
                     jd_text,
                     "; ".join(matched_keywords),
                 ),
+                "is_europe": is_europe_job(job["location_raw"], job["title"]),
+                "is_remote": is_remote_job(job["location_raw"], job["title"]),
                 "first_seen_at": first_seen_at,
                 "last_seen_at": checked_at,
                 "fetched_at": checked_at,

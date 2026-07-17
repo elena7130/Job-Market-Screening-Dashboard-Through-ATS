@@ -17,6 +17,8 @@ JOB_COLUMNS = [
     "location_raw",
     "location_normalized",
     "is_apac",
+    "is_europe",
+    "is_remote",
     "is_china",
     "ats_type",
     "ats_board_token",
@@ -80,7 +82,7 @@ def load_jobs(db_path: str, db_mtime: float) -> pd.DataFrame:
     _ = db_mtime
     query = """
         SELECT id, company_name, title, location_raw, location_normalized, is_apac,
-               is_china,
+               is_europe, is_remote, is_china,
                ats_type, ats_board_token,
                recency_status, fetch_status, is_current, matched_location_keywords,
                ats_published_at, ats_updated_at,
@@ -184,6 +186,8 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         recent_only = st.checkbox("只看近期岗位", value=False)
         china_only = st.checkbox("只看 China 岗位", value=False)
         apac_only = st.checkbox("只看 APAC 岗位", value=False)
+        europe_only = st.checkbox("Only Europe jobs", value=False)
+        remote_only = st.checkbox("Only Remote jobs", value=False)
 
         search_text = st.text_input(
             "全文搜索",
@@ -271,6 +275,10 @@ def filter_jobs(jobs_df: pd.DataFrame) -> pd.DataFrame:
         df = df[df["is_china"] == 1]
     if apac_only:
         df = df[df["is_apac"] == 1]
+    if europe_only:
+        df = df[df["is_europe"] == 1]
+    if remote_only:
+        df = df[df["is_remote"] == 1]
     if ats_filter:
         df = df[df["ats_type"].isin(ats_filter)]
     if recency_filter:
@@ -323,6 +331,8 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
         "location_raw",
         "location_normalized",
         "is_apac",
+        "is_europe",
+        "is_remote",
         "is_china",
         "recency_status",
         "matched_location_keywords",
@@ -342,6 +352,8 @@ def render_jobs_table(filtered_df: pd.DataFrame) -> None:
             "location_raw": "地点",
             "location_normalized": "标准地点",
             "is_apac": "APAC",
+            "is_europe": "Europe",
+            "is_remote": "Remote",
             "is_china": "China",
             "recency_status": "新鲜度",
             "matched_location_keywords": "命中关键词",

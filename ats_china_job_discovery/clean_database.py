@@ -11,7 +11,7 @@ from typing import Any
 
 import db as app_db
 from ats_dates import compute_ats_date_info
-from keywords import html_to_text, is_apac_job
+from keywords import html_to_text, is_apac_job, is_europe_job, is_remote_job
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -287,6 +287,10 @@ def ensure_jobs_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN location_normalized TEXT")
     if "is_apac" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN is_apac INTEGER")
+    if "is_europe" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN is_europe INTEGER")
+    if "is_remote" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN is_remote INTEGER")
     if "is_china" not in columns:
         conn.execute("ALTER TABLE jobs ADD COLUMN is_china INTEGER")
     if "ats_date_normalized" not in columns:
@@ -331,6 +335,8 @@ def clean_jobs(
         "jd_truncated": 0,
         "raw_json_cleared": 0,
         "is_apac_marked": 0,
+        "is_europe_marked": 0,
+        "is_remote_marked": 0,
         "is_china_marked": 0,
     }
 
@@ -393,6 +399,24 @@ def clean_jobs(
         updates["is_apac"] = apac_value
         if apac_value:
             stats["is_apac_marked"] += 1
+
+        europe_value = is_europe_job(
+            updates.get("location_normalized", row["location_normalized"]),
+            updates.get("location_raw", row["location_raw"]),
+            updates.get("title", row["title"]),
+        )
+        updates["is_europe"] = europe_value
+        if europe_value:
+            stats["is_europe_marked"] += 1
+
+        remote_value = is_remote_job(
+            updates.get("location_normalized", row["location_normalized"]),
+            updates.get("location_raw", row["location_raw"]),
+            updates.get("title", row["title"]),
+        )
+        updates["is_remote"] = remote_value
+        if remote_value:
+            stats["is_remote_marked"] += 1
 
         china_value = is_china_location(
             updates.get("location_normalized", row["location_normalized"])

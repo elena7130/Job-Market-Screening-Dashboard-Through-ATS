@@ -12,7 +12,7 @@ import requests
 from ats_dates import compute_ats_date_info
 import db
 from fetchers.common import TIMEOUT_SECONDS, USER_AGENT
-from keywords import find_location_keywords, is_apac_job
+from keywords import find_location_keywords, is_apac_job, is_europe_job, is_remote_job
 from main import classify_fetch_status, now_iso, stable_fallback_job_id
 from normalizer import normalize_job
 from recency import classify_recency
@@ -249,6 +249,16 @@ def update_job(
                 job["title"],
                 jd_text,
                 "; ".join(matched_keywords),
+            ),
+            "is_europe": is_europe_job(
+                job.get("location_normalized"),
+                job["location_raw"],
+                job["title"],
+            ),
+            "is_remote": is_remote_job(
+                job.get("location_normalized"),
+                job["location_raw"],
+                job["title"],
             ),
             "last_seen_at": checked_at,
             "fetched_at": checked_at,

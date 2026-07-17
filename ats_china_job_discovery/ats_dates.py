@@ -112,8 +112,13 @@ def parse_ats_date(value: object, *, today: date | None = None) -> date | None:
             continue
 
     for date_format in (
+        "%m/%d/%Y",
+        "%d/%m/%Y",
+        "%Y-%m-%d",
         "%Y-%m-%d %H:%M:%S %Z",
         "%Y-%m-%d %H:%M:%S",
+        "%d %b %Y",
+        "%d %B %Y",
         "%b %d, %Y",
         "%B %d, %Y",
     ):

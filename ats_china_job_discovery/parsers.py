@@ -33,6 +33,21 @@ def parse_ats_url(url: str) -> ParsedAtsUrl | None:
     if host == "jobs.thermofisher.com":
         return _parse_thermofisher_url(parsed.path)
 
+    if host == "jobs.appliedmaterials.com":
+        return _parse_radancy_url(host, parsed.path, parsed.query)
+
+    if host.endswith(".oraclecloud.com"):
+        return _parse_oracle_hcm_url(host, parsed.path, parsed.query)
+
+    if host.endswith(".smartsearchonline.com"):
+        return _parse_smartsearchonline_url(host, parsed.path, parsed.query)
+
+    if host == "jobs.dsv.com":
+        return _parse_successfactors_rmk_url(host, parsed.path, parsed.query)
+
+    if host == "jobs.standardchartered.com":
+        return _parse_successfactors_unified_url(host, parsed.path, parsed.query)
+
     if host == "careers.deetee.com" or host.endswith(".teamtailor.com"):
         return _parse_teamtailor_url(host, parsed.path, parsed.query)
 
@@ -207,6 +222,119 @@ def _parse_thermofisher_url(path: str) -> ParsedAtsUrl | None:
     )
 
 
+def _parse_radancy_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if not parts or parts[0] not in {"search-jobs", "job"}:
+        return None
+
+    token = f"{host}|{path or '/'}"
+    if query:
+        token = f"{token}?{query}"
+
+    return ParsedAtsUrl(
+        ats_type="radancy",
+        ats_token=token,
+        company_name_guess=guess_company_name(host.removeprefix("jobs.").split(".", 1)[0]),
+    )
+
+
+def _parse_oracle_hcm_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 6 or parts[:2] != ["hcmUI", "CandidateExperience"]:
+        return None
+    if parts[3] != "sites":
+        return None
+
+    site_number = _oracle_hcm_site_number(host, parts[4])
+    route = parts[5]
+    if route not in {"jobs", "job", "requisitions"}:
+        return None
+
+    token_parts = [host, site_number, route]
+    if len(parts) > 6:
+        token_parts.append(parts[6])
+    token = "|".join(token_parts)
+    if query:
+        token = f"{token}|{query}"
+
+    return ParsedAtsUrl(
+        ats_type="oracle_hcm",
+        ats_token=token,
+        company_name_guess=_oracle_hcm_company_guess(host),
+    )
+
+
+def _oracle_hcm_company_guess(host: str) -> str:
+    known_hosts = {
+        "hdjq.fa.us2.oraclecloud.com": "Emerson",
+        "ibqbjb.fa.ocs.oraclecloud.com": "Honeywell",
+    }
+    return known_hosts.get(host) or guess_company_name(host.split(".", 1)[0])
+
+
+def _oracle_hcm_site_number(host: str, site_key: str) -> str:
+    known_sites = {
+        ("ibqbjb.fa.ocs.oraclecloud.com", "Honeywell"): "CX_1",
+    }
+    return known_sites.get((host, site_key), site_key)
+
+
+def _parse_smartsearchonline_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 3 or parts[1].lower() != "jobs":
+        return None
+    page = parts[2].lower()
+    if page not in {"process_jobsearch.asp", "jobdetails.asp"}:
+        return None
+
+    tenant = parts[0]
+    token = f"{host}|{tenant}|{page}"
+    if query:
+        token = f"{token}|{query}"
+    return ParsedAtsUrl(
+        ats_type="smartsearchonline",
+        ats_token=token,
+        company_name_guess=guess_company_name(tenant),
+    )
+
+
+def _parse_successfactors_rmk_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if not parts or parts[0] not in {"search", "job"}:
+        return None
+
+    token = f"{host}|{path or '/'}"
+    if query:
+        token = f"{token}?{query}"
+    return ParsedAtsUrl(
+        ats_type="successfactors_rmk",
+        ats_token=token,
+        company_name_guess="DSV",
+    )
+
+
+def _parse_successfactors_unified_url(host: str, path: str, query: str = "") -> ParsedAtsUrl | None:
+    parts = [part for part in path.split("/") if part]
+    if not parts or parts[0] not in {"go", "job", "search"}:
+        return None
+
+    query_params = parse_qs(query)
+    locale = query_params.get("locale", ["en_GB"])[0] or "en_GB"
+    token_parts = [host, f"locale={locale}"]
+
+    location = query_params.get("location", [""])[0]
+    if not location and "facetFilters" in query_params:
+        location = "China"
+    if location:
+        token_parts.append(f"location={location}")
+
+    return ParsedAtsUrl(
+        ats_type="successfactors_unified",
+        ats_token="|".join(token_parts),
+        company_name_guess="Standard Chartered",
+    )
+
+
 def _parse_teamtailor_url(host: str, path: str, query: str) -> ParsedAtsUrl | None:
     parts = [part for part in path.split("/") if part]
     if not parts or parts[0] != "jobs":
@@ -256,10 +384,42 @@ def classify_ats_url_kind(url: str) -> str:
         return "job_page" if "o" in parts and len(parts) > parts.index("o") + 1 else "company_page"
     if host == "jobs.thermofisher.com":
         return "company_page" if len(parts) >= 4 and parts[2] == "c" else "unsupported"
+    if host == "jobs.appliedmaterials.com":
+        if parts and parts[0] == "job":
+            return "job_page"
+        if parts and parts[0] == "search-jobs":
+            return "company_page"
+        return "unsupported"
+    if host.endswith(".oraclecloud.com"):
+        if len(parts) >= 6 and parts[:2] == ["hcmUI", "CandidateExperience"] and parts[3] == "sites":
+            if parts[5] in {"job", "requisitions"}:
+                return "job_page"
+            if parts[5] == "jobs":
+                return "company_page"
+        return "unsupported"
+    if host.endswith(".smartsearchonline.com"):
+        if len(parts) >= 3 and parts[1].lower() == "jobs":
+            if parts[2].lower() == "jobdetails.asp":
+                return "job_page"
+            if parts[2].lower() == "process_jobsearch.asp":
+                return "company_page"
+        return "unsupported"
+    if host == "jobs.dsv.com":
+        if parts and parts[0] == "job":
+            return "job_page"
+        if parts and parts[0] == "search":
+            return "company_page"
+        return "unsupported"
+    if host == "jobs.standardchartered.com":
+        if parts and parts[0] == "job":
+            return "job_page"
+        if parts and parts[0] in {"go", "search"}:
+            return "company_page"
+        return "unsupported"
     if host == "careers.deetee.com" or host.endswith(".teamtailor.com"):
         return "job_page" if len(parts) >= 2 and parts[0] == "jobs" else "company_page"
     if host.endswith(".myworkdayjobs.com"):
-        return "job_page" if "job" in parts else "company_page"
+        return "job_page" if "job" in parts or "details" in parts else "company_page"
     if host.endswith(".avature.net"):
         return "job_page" if "JobDetail" in parts else "company_page"
     if host.endswith(".bamboohr.com"):

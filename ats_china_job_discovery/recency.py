@@ -62,4 +62,10 @@ def parse_date(value: object) -> date | None:
             return datetime.fromisoformat(candidate).date()
         except ValueError:
             continue
+
+    for date_format in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(text, date_format).date()
+        except ValueError:
+            continue
     return None
